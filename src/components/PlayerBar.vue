@@ -205,13 +205,14 @@ function onSeek(e: Event): void {
   align-items: center;
   justify-content: center;
   color: var(--text-2);
-  transition: color 0.12s ease, transform 0.08s ease;
+  transition: color 0.15s ease, transform 0.3s var(--ease-spring);
 }
 .t-btn:hover:not(:disabled) {
   color: var(--text);
 }
 .t-btn:active:not(:disabled) {
-  transform: scale(0.92);
+  transform: scale(0.86);
+  transition-duration: 0.08s;
 }
 .t-btn:disabled {
   opacity: 0.35;

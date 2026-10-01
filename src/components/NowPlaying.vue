@@ -210,7 +210,7 @@ function onSeek(e: Event): void {
   color: rgba(255, 255, 255, 0.85);
   background: rgba(255, 255, 255, 0.14);
   backdrop-filter: blur(10px);
-  transition: background 0.15s ease;
+  transition: background 0.25s var(--ease-out-soft), transform 0.35s var(--ease-spring);
 }
 .close:hover {
   background: rgba(255, 255, 255, 0.26);
@@ -302,7 +302,7 @@ function onSeek(e: Event): void {
   padding: 7px 0;
   color: rgba(255, 255, 255, 0.42);
   cursor: pointer;
-  transition: color 0.25s ease, transform 0.25s ease;
+  transition: color 0.4s var(--ease-out-soft), transform 0.4s var(--ease-out-soft);
   transform-origin: left center;
 }
 .lyrics.synced p.near {
@@ -349,13 +349,14 @@ function onSeek(e: Event): void {
   align-items: center;
   justify-content: center;
   color: rgba(255, 255, 255, 0.75);
-  transition: color 0.12s ease, transform 0.08s ease;
+  transition: color 0.15s ease, transform 0.3s var(--ease-spring);
 }
 .t-btn:hover {
   color: #fff;
 }
 .t-btn:active {
-  transform: scale(0.92);
+  transform: scale(0.86);
+  transition-duration: 0.08s;
 }
 .t-btn.on {
   color: #fff;

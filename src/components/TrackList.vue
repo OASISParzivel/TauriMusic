@@ -61,6 +61,7 @@ function play(t: Track): void {
   border-radius: 8px;
   cursor: pointer;
   min-width: 0;
+  transition: background 0.25s var(--ease-out-soft);
 }
 .row:hover {
   background: var(--hover);

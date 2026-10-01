@@ -36,10 +36,10 @@ const emit = defineEmits<{ open: [] }>();
   overflow: hidden;
   box-shadow: var(--card-shadow);
   background: var(--bg-3);
-  transition: transform 0.18s ease;
+  transition: transform 0.45s var(--ease-spring);
 }
 .card:hover .cover {
-  transform: translateY(-2px);
+  transform: translateY(-4px) scale(1.015);
 }
 .cover img {
   width: 100%;
@@ -70,7 +70,7 @@ const emit = defineEmits<{ open: [] }>();
   justify-content: center;
   opacity: 0;
   transform: translateY(6px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity 0.2s ease, transform 0.4s var(--ease-spring);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 .playbtn svg {

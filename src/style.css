@@ -16,6 +16,16 @@
   --pill-bg: rgba(120, 120, 128, 0.14);
   --scrollbar: rgba(0, 0, 0, 0.28);
   --bar-bg: rgba(247, 247, 249, 0.88);
+
+  /* 动效令牌 —— HIG Motion:弹簧物理、可中断、无突然停止。
+     --ease-out-soft 用于页面级位移/淡入(丝滑减速),
+     --ease-spring 用 linear() 采样真实弹簧曲线,带轻微过冲,微交互用。 */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: linear(
+    0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 17%, 1.008 19.4%,
+    1.036 21.8%, 1.043 24.2%, 1.029 27%, 0.994 31.4%, 0.986 34.1%, 0.996 38.4%,
+    1.004 43.2%, 1 50.1%, 1
+  );
 }
 
 html.dark {
@@ -75,6 +85,11 @@ button {
   border: none;
   cursor: pointer;
   padding: 0;
+  transition: transform 0.35s var(--ease-spring);
+}
+/* 按压手感:按下快速下沉(在组件里覆盖 transition-duration),松手弹簧回弹 */
+button:active {
+  transform: scale(0.96);
 }
 
 input {
@@ -121,10 +136,10 @@ img {
   border-radius: 50%;
   background: var(--text);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  transition: transform 0.1s ease;
+  transition: transform 0.3s var(--ease-spring);
 }
 .range:hover::-webkit-slider-thumb {
-  transform: scale(1.15);
+  transform: scale(1.2);
 }
 
 /* 视图通用骨架 */
@@ -174,10 +189,13 @@ img {
   padding: 8px 22px;
   font-size: 14px;
   font-weight: 600;
-  transition: background 0.15s ease;
+  transition: background 0.2s ease, transform 0.35s var(--ease-spring);
 }
 .primary-pill:hover {
   background: var(--accent-hover);
+}
+.primary-pill:active {
+  transition-duration: 0.09s;
 }
 
 /* ===== 液态玻璃外观 =====
@@ -223,9 +241,11 @@ html.glass body {
     transform: scale(1.14) translateX(1.5%);
   }
 }
-.amb-enter-active,
+.amb-enter-active {
+  transition: opacity 1.6s var(--ease-out-soft);
+}
 .amb-leave-active {
-  transition: opacity 1s ease;
+  transition: opacity 1.1s ease;
 }
 .amb-enter-from,
 .amb-leave-to {
@@ -263,6 +283,7 @@ html.glass .shell {
 html.glass .sidebar,
 html.glass .playerbar {
   position: relative;
+  isolation: isolate;
   border-radius: 24px;
   border: 1px solid transparent;
   /* 玻璃本体:padding-box 是半透暗色托底,border-box 是绕边缘一圈的镜面高光 */
@@ -273,12 +294,15 @@ html.glass .playerbar {
       border-box;
   backdrop-filter: blur(36px) saturate(2) brightness(1.12);
   -webkit-backdrop-filter: blur(36px) saturate(2) brightness(1.12);
+  /* "厚玻璃"边缘:四边 rim light,顶边最亮、底边次之 —— 光在玻璃厚度里折射 */
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.25),
-    inset 0 -1px 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.24),
+    inset 1px 0 1px rgba(255, 255, 255, 0.14),
+    inset -1px 0 1px rgba(255, 255, 255, 0.14),
     0 14px 44px rgba(0, 0, 0, 0.45);
 }
-/* 斜向光泽:玻璃面上的一道光带 */
+/* 斜向光泽:玻璃面上的一道光带(screen 混合让它像光而不是漆) */
 html.glass .sidebar::before,
 html.glass .playerbar::before {
   content: "";
@@ -286,13 +310,23 @@ html.glass .playerbar::before {
   inset: 0;
   z-index: -1;
   border-radius: inherit;
+  mix-blend-mode: screen;
   background: linear-gradient(
     112deg,
-    rgba(255, 255, 255, 0.16) 0%,
-    rgba(255, 255, 255, 0.05) 28%,
+    rgba(255, 255, 255, 0.14) 0%,
+    rgba(255, 255, 255, 0.045) 28%,
     rgba(255, 255, 255, 0) 52%
   );
   pointer-events: none;
+}
+/* 真实折射:Chromium(WebView2)支持在 backdrop-filter 里挂 SVG 位移滤镜,
+   让玻璃后面的色彩像透过厚玻璃一样轻微弯曲流动 */
+@supports (backdrop-filter: url("#glass-refract")) {
+  html.glass .sidebar,
+  html.glass .playerbar {
+    backdrop-filter: blur(30px) saturate(1.9) brightness(1.1) url("#glass-refract");
+    -webkit-backdrop-filter: blur(30px) saturate(1.9) brightness(1.1) url("#glass-refract");
+  }
 }
 html.glass .playerbar {
   grid-column: 2;

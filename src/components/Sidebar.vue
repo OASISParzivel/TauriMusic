@@ -173,10 +173,14 @@ nav {
   font-weight: 500;
   color: var(--text);
   text-align: left;
-  transition: background 0.12s ease;
+  transition: background 0.25s var(--ease-out-soft), transform 0.35s var(--ease-spring);
 }
 .nav-item:hover {
   background: var(--hover);
+}
+.nav-item:active {
+  transform: scale(0.98);
+  transition-duration: 0.1s;
 }
 .nav-item.active {
   background: var(--active);
@@ -215,11 +219,15 @@ nav {
   font-size: 13px;
   color: var(--text-2);
   text-align: left;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background 0.25s var(--ease-out-soft), color 0.2s ease, transform 0.35s var(--ease-spring);
 }
 .action:hover {
   background: var(--hover);
   color: var(--text);
+}
+.action:active {
+  transform: scale(0.97);
+  transition-duration: 0.1s;
 }
 .action .ico {
   width: 17px;

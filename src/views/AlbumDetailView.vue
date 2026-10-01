@@ -132,7 +132,7 @@ h1 {
   padding: 8px 22px;
   font-size: 14px;
   font-weight: 600;
-  transition: filter 0.15s ease;
+  transition: filter 0.2s ease, transform 0.35s var(--ease-spring);
 }
 .ghost-pill:hover {
   filter: brightness(1.06);
