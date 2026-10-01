@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { albums, lib, addFolder, removeFolder, rescan, albumRecency } from "../stores/library";
+import { albums, lib, addFolder, removeFolder, rescan, albumRecency, openImportDir } from "../stores/library";
 import { openAlbum } from "../stores/ui";
 import AlbumCard from "../components/AlbumCard.vue";
 
@@ -30,10 +30,23 @@ function shortPath(p: string): string {
     </div>
 
     <div v-else-if="lib.tracks.length === 0" class="empty">
+      <svg class="icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9.2 17.3V7l9-1.9v10.2" />
+        <circle cx="6.9" cy="17.4" r="2.3" />
+        <circle cx="15.9" cy="15.4" r="2.3" />
+      </svg>
       <h2>曲库为空</h2>
-      <p>在所选文件夹中没有找到音频文件</p>
-      <button class="primary-pill" style="margin-top: 8px" @click="addFolder">添加其他文件夹</button>
-      <button class="link" @click="rescan">重新扫描</button>
+      <p>把音频文件<b>拖进本窗口</b>即可导入,或放入导入文件夹</p>
+      <button class="primary-pill" style="margin-top: 8px" title="MP3 / FLAC / M4A / OGG / OPUS / WAV" @click="openImportDir">
+        打开导入文件夹
+      </button>
+      <p class="dir" :title="lib.importDir">{{ lib.importDir }}</p>
+      <p class="formats">支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持内嵌或同名 .lrc · 封面自动识别</p>
+      <div class="alt">
+        <button class="link" @click="addFolder">添加其他文件夹</button>
+        <span class="dot">·</span>
+        <button class="link" @click="rescan">重新扫描</button>
+      </div>
     </div>
 
     <template v-else>
@@ -107,5 +120,29 @@ function shortPath(p: string): string {
 }
 .link:hover {
   text-decoration: underline;
+}
+
+.dir {
+  font-size: 11.5px;
+  color: var(--text-3);
+  max-width: 560px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: center;
+}
+.formats {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.alt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alt .dot {
+  color: var(--text-3);
 }
 </style>

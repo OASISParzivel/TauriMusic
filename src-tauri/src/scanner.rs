@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::model::{ScanReport, Track};
 use crate::AppState;
 
-const EXTENSIONS: &[&str] = &["mp3", "m4a", "flac", "ogg", "oga", "opus", "wav"];
+pub const EXTENSIONS: &[&str] = &["mp3", "m4a", "flac", "ogg", "oga", "opus", "wav"];
 /// 目录内兜底封面文件名(不含扩展名)
 const COVER_NAMES: &[&str] = &["cover", "folder", "front", "album", "albumart"];
 

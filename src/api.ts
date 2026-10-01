@@ -44,6 +44,12 @@ export interface LyricsPayload {
   plain: string | null;
 }
 
+export interface ImportReport {
+  foldersAdded: number;
+  filesCopied: number;
+  skipped: number;
+}
+
 export const api = {
   getLibrary: () => invoke<Library>("get_library"),
   pickFolder: () => invoke<string | null>("pick_music_folder"),
@@ -51,4 +57,7 @@ export const api = {
   removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
   scan: () => invoke<ScanReport>("scan_library"),
   getLyrics: (id: string) => invoke<LyricsPayload | null>("get_lyrics", { id }),
+  getImportDir: () => invoke<string>("get_import_dir"),
+  openImportDir: () => invoke<string>("open_import_dir"),
+  importPaths: (paths: string[]) => invoke<ImportReport>("import_paths", { paths }),
 };

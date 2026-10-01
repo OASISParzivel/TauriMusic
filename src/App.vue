@@ -11,7 +11,7 @@ import ArtistsView from "./views/ArtistsView.vue";
 import SongsView from "./views/SongsView.vue";
 import SearchView from "./views/SearchView.vue";
 import { ui, initTheme, initGlass } from "./stores/ui";
-import { initLibrary } from "./stores/library";
+import { initLibrary, initDragImport } from "./stores/library";
 import { current } from "./stores/player";
 
 const views = {
@@ -36,6 +36,7 @@ onMounted(() => {
   initTheme();
   initGlass();
   void initLibrary();
+  void initDragImport();
 });
 </script>
 

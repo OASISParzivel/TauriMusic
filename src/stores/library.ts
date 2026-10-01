@@ -1,5 +1,6 @@
 import { computed, reactive } from "vue";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, type Track } from "../api";
 
 export interface Album {
@@ -19,6 +20,10 @@ interface LibState {
   scanning: boolean;
   scanCurrent: number;
   scanTotal: number;
+  /** 应用自带的导入目录绝对路径 */
+  importDir: string;
+  /** 最近一次拖拽导入的结果提示(自动消失) */
+  importStatus: string;
 }
 
 export const lib = reactive<LibState>({
@@ -28,7 +33,11 @@ export const lib = reactive<LibState>({
   scanning: false,
   scanCurrent: 0,
   scanTotal: 0,
+  importDir: "",
+  importStatus: "",
 });
+
+let importStatusTimer = 0;
 
 export async function initLibrary(): Promise<void> {
   try {
@@ -41,6 +50,12 @@ export async function initLibrary(): Promise<void> {
     lib.loaded = true;
   }
 
+  try {
+    lib.importDir = await api.getImportDir();
+  } catch (err) {
+    console.error("获取导入目录失败", err);
+  }
+
   void listen<{ current: number; total: number }>("scan-progress", (e) => {
     lib.scanCurrent = e.payload.current;
     lib.scanTotal = e.payload.total;
@@ -48,6 +63,44 @@ export async function initLibrary(): Promise<void> {
 
   if (lib.folders.length > 0) {
     void rescan();
+  }
+}
+
+/** 监听文件拖进窗口:整个文件夹登记为扫描来源,散装音频/歌词复制进导入目录 */
+export async function initDragImport(): Promise<void> {
+  try {
+    await getCurrentWebview().onDragDropEvent((e) => {
+      if (e.payload.type === "drop" && e.payload.paths.length) {
+        void importDropped(e.payload.paths);
+      }
+    });
+  } catch (err) {
+    console.error("拖拽导入初始化失败", err);
+  }
+}
+
+export async function importDropped(paths: string[]): Promise<void> {
+  try {
+    const r = await api.importPaths(paths);
+    const parts: string[] = [];
+    if (r.filesCopied) parts.push(`导入 ${r.filesCopied} 个文件`);
+    if (r.foldersAdded) parts.push(`添加 ${r.foldersAdded} 个文件夹`);
+    if (r.skipped) parts.push(`跳过 ${r.skipped} 个不支持`);
+    lib.importStatus = parts.length ? parts.join(" · ") : "没有可导入的文件";
+  } catch (err) {
+    console.error("导入失败", err);
+    lib.importStatus = "导入失败";
+  }
+  window.clearTimeout(importStatusTimer);
+  importStatusTimer = window.setTimeout(() => (lib.importStatus = ""), 6000);
+  await rescan();
+}
+
+export async function openImportDir(): Promise<void> {
+  try {
+    lib.importDir = await api.openImportDir();
+  } catch (err) {
+    console.error("打开导入目录失败", err);
   }
 }
 

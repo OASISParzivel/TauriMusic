@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { ui, go, toggleDark, toggleGlass } from "../stores/ui";
-import { lib, addFolder, rescan } from "../stores/library";
+import { lib, addFolder, rescan, openImportDir } from "../stores/library";
 
 const navItems = [
   { name: "home", label: "最近添加", icon: "clock" },
@@ -69,8 +69,20 @@ const progressText = computed(() =>
     <div class="spacer" />
 
     <div v-if="lib.scanning" class="status">{{ progressText }}</div>
+    <div v-else-if="lib.importStatus" class="status">{{ lib.importStatus }}</div>
 
     <div class="actions">
+      <button
+        class="action"
+        title="打开应用自带的导入文件夹:支持 MP3 / FLAC / M4A / OGG / OPUS / WAV,歌词支持内嵌或同名 .lrc"
+        @click="openImportDir"
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 7c0-1.1.9-2 2-2h3.4l2 2.2h7.6c1.1 0 2 .9 2 2v8.3c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2z" />
+          <path d="M12 10.6v5M9.7 13.3l2.3 2.3 2.3-2.3" />
+        </svg>
+        <span>导入文件夹</span>
+      </button>
       <button class="action" title="添加音乐文件夹" @click="addFolder">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3.5 7c0-1.1.9-2 2-2h3.4l2 2.2h7.6c1.1 0 2 .9 2 2v8.3c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2z" />
