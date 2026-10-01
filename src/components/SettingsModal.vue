@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import Modal from "./Modal.vue";
 import { ui, setThemeMode, toggleGlass } from "../stores/ui";
-import { lib, openImportDir, rescan } from "../stores/library";
+import { lib, openImportDir, addFolder, rescan } from "../stores/library";
 
 const themeOptions = [
   { value: "system", label: "跟随系统" },
@@ -47,7 +47,10 @@ const FORMAT_HINT = "支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持�
     <div class="group">
       <div class="row">
         <span class="row-label">导入文件夹</span>
-        <button class="mini" @click="openImportDir">打开</button>
+        <div class="btns">
+          <button class="mini" @click="addFolder">添加音乐文件夹</button>
+          <button class="mini" @click="openImportDir">打开</button>
+        </div>
       </div>
       <p class="dir" :title="lib.importDir">{{ lib.importDir }}</p>
       <p class="hint">{{ FORMAT_HINT }}</p>
@@ -140,6 +143,11 @@ const FORMAT_HINT = "支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持�
   justify-content: space-between;
   gap: 10px;
   padding: 8px 12px;
+}
+.btns {
+  display: flex;
+  gap: 6px;
+  flex: none;
 }
 .row-label {
   font-size: 13px;
