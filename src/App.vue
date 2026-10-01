@@ -4,6 +4,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import Sidebar from "./components/Sidebar.vue";
 import TopBar from "./components/TopBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
+import SettingsModal from "./components/SettingsModal.vue";
+import AboutModal from "./components/AboutModal.vue";
 import HomeView from "./views/HomeView.vue";
 import AlbumsView from "./views/AlbumsView.vue";
 import AlbumDetailView from "./views/AlbumDetailView.vue";
@@ -70,6 +72,13 @@ onMounted(() => {
 
     <Transition name="np">
       <NowPlaying v-if="ui.nowPlayingOpen && current" />
+    </Transition>
+
+    <Transition name="modal">
+      <SettingsModal v-if="ui.settingsOpen" />
+    </Transition>
+    <Transition name="modal">
+      <AboutModal v-if="ui.aboutOpen" />
     </Transition>
   </div>
 </template>
@@ -144,5 +153,25 @@ onMounted(() => {
   opacity: 0;
   transform: translateY(30px) scale(0.99);
   filter: blur(8px);
+}
+
+/* 弹窗过渡:遮罩淡入,卡片弹簧上浮 */
+.modal-enter-active {
+  transition: opacity 0.28s var(--ease-out-soft);
+}
+.modal-leave-active {
+  transition: opacity 0.2s ease;
+}
+.modal-enter-active :deep(.modal) {
+  transition: transform 0.38s var(--ease-spring);
+}
+.modal-enter-from {
+  opacity: 0;
+}
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from :deep(.modal) {
+  transform: translateY(16px) scale(0.965);
 }
 </style>

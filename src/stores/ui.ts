@@ -21,6 +21,10 @@ interface UiState {
   glass: boolean;
   /** 全屏播放页(含歌词)是否打开 */
   nowPlayingOpen: boolean;
+  /** 设置弹窗 */
+  settingsOpen: boolean;
+  /** 关于弹窗 */
+  aboutOpen: boolean;
 }
 
 export const ui = reactive<UiState>({
@@ -32,6 +36,8 @@ export const ui = reactive<UiState>({
   themeMode: "system",
   glass: false,
   nowPlayingOpen: false,
+  settingsOpen: false,
+  aboutOpen: false,
 });
 
 const systemDark = ref(false);

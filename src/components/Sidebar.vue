@@ -146,6 +146,24 @@ const progressText = computed(() =>
           </svg>
         </button>
       </div>
+
+      <button class="action" title="设置" @click="ui.settingsOpen = true">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <path d="M5 7.5h7M16.5 7.5H19M5 12h3M11.5 12H19M5 16.5h7M16.5 16.5H19" />
+          <circle cx="14" cy="7.5" r="2" />
+          <circle cx="9.5" cy="12" r="2" />
+          <circle cx="14" cy="16.5" r="2" />
+        </svg>
+        <span>设置</span>
+      </button>
+      <button class="action" title="关于 TauriMusic" @click="ui.aboutOpen = true">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <circle cx="12" cy="12" r="8.2" />
+          <path d="M12 11.2v4.6" />
+          <circle cx="12" cy="8" r="1" fill="currentColor" stroke="none" />
+        </svg>
+        <span>关于</span>
+      </button>
     </div>
   </aside>
 </template>
