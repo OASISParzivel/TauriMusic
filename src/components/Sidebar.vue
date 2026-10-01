@@ -1,7 +1,20 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { ui, go, toggleDark, toggleGlass } from "../stores/ui";
+import { computed, ref } from "vue";
+import { ui, go, setThemeMode, toggleGlass } from "../stores/ui";
 import { lib, addFolder, rescan, openImportDir } from "../stores/library";
+
+const themeOptions = [
+  { value: "system", label: "跟随系统" },
+  { value: "light", label: "浅色" },
+  { value: "dark", label: "黑色" },
+] as const;
+
+const themeOpen = ref(false);
+
+function pickTheme(value: (typeof themeOptions)[number]["value"]): void {
+  setThemeMode(value);
+  themeOpen.value = false;
+}
 
 const navItems = [
   { name: "home", label: "最近添加", icon: "clock" },
@@ -97,23 +110,42 @@ const progressText = computed(() =>
         </svg>
         <span>重新扫描</span>
       </button>
+
       <button class="action" :title="ui.glass ? '关闭液态玻璃' : '开启液态玻璃'" @click="toggleGlass">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
           <path d="M12 3.5c3.2 3.7 5.5 6.7 5.5 9.5a5.5 5.5 0 1 1-11 0c0-2.8 2.3-5.8 5.5-9.5z" />
           <path d="M9.5 13.5a2.6 2.6 0 0 0 2 2.6" stroke-linecap="round" />
         </svg>
-        <span>{{ ui.glass ? "原生外观" : "液态玻璃" }}</span>
-      </button>
-      <button class="action" :title="ui.dark ? '切换为浅色' : '切换为深色'" @click="toggleDark">
-        <svg v-if="!ui.dark" class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
-          <path d="M20 13.6A8 8 0 0 1 10.4 4 8 8 0 1 0 20 13.6z" />
+        <span>液态玻璃</span>
+        <svg v-if="ui.glass" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 12.5 4.5 4.5L19 8" />
         </svg>
-        <svg v-else class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M18 6l-1.4 1.4M7.4 16.6 6 18" />
-        </svg>
-        <span>{{ ui.dark ? "浅色外观" : "深色外观" }}</span>
       </button>
+
+      <button class="action" title="皮肤:跟随系统 / 浅色 / 黑色" @click="themeOpen = !themeOpen">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <circle cx="12" cy="12" r="8.2" />
+          <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4z" fill="currentColor" stroke="none" />
+        </svg>
+        <span>外观</span>
+        <svg class="check chev" :class="{ open: themeOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m7 10 5 5 5-5" />
+        </svg>
+      </button>
+      <div v-if="themeOpen" class="theme-opts">
+        <button
+          v-for="opt in themeOptions"
+          :key="opt.value"
+          class="opt"
+          :class="{ on: ui.themeMode === opt.value }"
+          @click="pickTheme(opt.value)"
+        >
+          <span>{{ opt.label }}</span>
+          <svg v-if="ui.themeMode === opt.value" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m5 12.5 4.5 4.5L19 8" />
+          </svg>
+        </button>
+      </div>
     </div>
   </aside>
 </template>
@@ -256,5 +288,51 @@ html.glass .nav-item.active {
   width: 17px;
   height: 17px;
   flex: none;
+}
+.action .check {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  flex: none;
+  color: var(--text-2);
+}
+.action .chev {
+  color: var(--text-3);
+  transition: transform 0.25s var(--ease-out-soft);
+}
+.action .chev.open {
+  transform: rotate(180deg);
+}
+
+.theme-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 4px;
+}
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px 5px 39px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: left;
+  transition: background 0.25s var(--ease-out-soft), color 0.2s ease;
+}
+.opt:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.opt.on {
+  color: var(--text);
+}
+.opt .check {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  flex: none;
+  color: var(--text-2);
 }
 </style>
