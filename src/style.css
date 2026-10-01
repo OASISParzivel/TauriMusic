@@ -181,75 +181,108 @@ img {
 }
 
 /* ===== 液态玻璃外观 =====
-   窗口透明 + Windows Acrylic 提供系统级背景模糊,
-   应用内各面板换成半透明玻璃材质(html.glass 时生效)。 */
+   不依赖系统特效:窗口内铺一层由专辑封面驱动的"氛围背景",
+   玻璃卡片折射这层色彩——背景永远绚丽、可控、随音乐变化。 */
+
 html.glass,
 html.glass body {
+  background: #101014;
+}
+
+/* 氛围背景层 */
+.ambient {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  background: linear-gradient(135deg, #3b1c4d 0%, #7a1f33 42%, #201f36 78%, #101018 100%);
+}
+.ambient-img {
+  position: absolute;
+  inset: -14%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(88px) saturate(1.9) brightness(0.92);
+  animation: ambient-drift 40s ease-in-out infinite alternate;
+}
+@keyframes ambient-drift {
+  from {
+    transform: scale(1.02) translateX(-1.5%);
+  }
+  to {
+    transform: scale(1.14) translateX(1.5%);
+  }
+}
+.amb-enter-active,
+.amb-leave-active {
+  transition: opacity 1s ease;
+}
+.amb-enter-from,
+.amb-leave-to {
+  opacity: 0;
+}
+.ambient-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0.35) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.05) 32%, rgba(0, 0, 0, 0.06) 62%, rgba(0, 0, 0, 0.45) 100%);
+}
+
+/* 玻璃模式统一深色材质令牌:全部组件自动适配出可读的玻璃观感 */
+html.glass {
+  --text: #f5f5f7;
+  --text-2: rgba(245, 245, 247, 0.66);
+  --text-3: rgba(245, 245, 247, 0.4);
+  --hairline: rgba(255, 255, 255, 0.12);
+  --hover: rgba(255, 255, 255, 0.09);
+  --active: rgba(255, 255, 255, 0.16);
+  --pill-bg: rgba(255, 255, 255, 0.13);
+  --card-shadow: 0 10px 34px rgba(0, 0, 0, 0.42);
+  --scrollbar: rgba(255, 255, 255, 0.32);
+  --bar-bg: rgba(24, 24, 32, 0.55);
+}
+
+/* 悬浮玻璃卡片:侧栏(通高)+ 播放条,内容区直接呼吸在氛围背景上 */
+html.glass .shell {
+  position: relative;
+  z-index: 1;
+  padding: 10px;
+  gap: 10px;
+}
+html.glass .sidebar,
+html.glass .playerbar {
+  border-radius: 20px;
+  background: rgba(24, 24, 32, 0.55);
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+html.glass .playerbar {
+  grid-column: 2;
+}
+html.glass .content {
   background: transparent;
 }
 
-html.glass .content {
-  background: rgba(255, 255, 255, 0.38);
-}
-html.dark.glass .content {
-  background: rgba(16, 16, 20, 0.55);
-}
-
-html.glass .sidebar {
-  background: rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(28px) saturate(1.6);
-  border-right: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
-}
-html.dark.glass .sidebar {
-  background: rgba(22, 22, 28, 0.58);
-  border-right: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-html.glass .playerbar {
-  background: rgba(255, 255, 255, 0.55);
-  backdrop-filter: blur(30px) saturate(1.7);
-  border-top: 1px solid rgba(255, 255, 255, 0.42);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
-}
-html.dark.glass .playerbar {
-  background: rgba(20, 20, 25, 0.6);
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-/* 艺人页滚动吸顶表头:玻璃下也要能盖住滚过的内容 */
+/* 艺人页吸顶表头在玻璃下需要自己的磨砂底 */
 html.glass .detail .view-head {
-  background: rgba(255, 255, 255, 0.42);
-  backdrop-filter: blur(24px) saturate(1.6);
-  border-radius: 10px;
-}
-html.dark.glass .detail .view-head {
-  background: rgba(22, 22, 28, 0.42);
+  background: rgba(24, 24, 32, 0.5);
+  backdrop-filter: blur(30px) saturate(1.7);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-html.glass .search {
-  background: rgba(255, 255, 255, 0.5);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
-}
-html.dark.glass .search {
-  background: rgba(255, 255, 255, 0.1);
-}
-html.glass .chip {
-  background: rgba(255, 255, 255, 0.48);
-}
-html.dark.glass .chip {
-  background: rgba(255, 255, 255, 0.1);
-}
-html.glass .ghost-pill {
-  background: rgba(255, 255, 255, 0.5);
-}
-html.dark.glass .ghost-pill {
-  background: rgba(255, 255, 255, 0.12);
-}
-/* 玻璃模式下专辑卡片封面下的白色托盘不再需要 */
 html.glass .cover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
 }
 
+/* 进度条 / 音量条在玻璃下的底槽 */
+html.glass .range {
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--fill, 0%),
+    rgba(255, 255, 255, 0.22) var(--fill, 0%)
+  );
+}

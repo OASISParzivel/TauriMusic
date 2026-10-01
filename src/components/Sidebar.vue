@@ -92,7 +92,7 @@ const progressText = computed(() =>
         </svg>
         <span>{{ ui.glass ? "原生外观" : "液态玻璃" }}</span>
       </button>
-      <button class="action" :title="ui.dark ? '切换为浅色' : '切换为深色'" @click="toggleDark">
+      <button v-if="!ui.glass" class="action" :title="ui.dark ? '切换为浅色' : '切换为深色'" @click="toggleDark">
         <svg v-if="!ui.dark" class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
           <path d="M20 13.6A8 8 0 0 1 10.4 4 8 8 0 1 0 20 13.6z" />
         </svg>

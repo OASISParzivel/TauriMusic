@@ -1,5 +1,4 @@
 import { reactive, watchEffect } from "vue";
-import { getCurrentWindow, Effect } from "@tauri-apps/api/window";
 
 export type ViewName = "home" | "albums" | "album" | "artists" | "songs" | "search";
 
@@ -12,7 +11,7 @@ interface UiState {
   /** 搜索关键词 */
   search: string;
   dark: boolean;
-  /** 液态玻璃外观(窗口透明 + 亚克力模糊) */
+  /** 液态玻璃外观(应用内氛围背景 + 玻璃卡片) */
   glass: boolean;
   /** 全屏播放页(含歌词)是否打开 */
   nowPlayingOpen: boolean;
@@ -54,36 +53,17 @@ export function initTheme(): void {
 export function toggleDark(): void {
   ui.dark = !ui.dark;
   localStorage.setItem("tm-dark", ui.dark ? "1" : "0");
-  if (ui.glass) void applyGlass();
 }
 
-/** 玻璃外观:半透明材质 + 系统级 Acrylic 背景模糊 */
+/** 液态玻璃:封面驱动的氛围背景 + 悬浮玻璃卡片(折射应用自身内容) */
 export function initGlass(): void {
   ui.glass = localStorage.getItem("tm-glass") !== "0"; // 默认开启
-  void applyGlass();
+  watchEffect(() => {
+    document.documentElement.classList.toggle("glass", ui.glass);
+  });
 }
 
 export function toggleGlass(): void {
   ui.glass = !ui.glass;
   localStorage.setItem("tm-glass", ui.glass ? "1" : "0");
-  void applyGlass();
-}
-
-async function applyGlass(): Promise<void> {
-  document.documentElement.classList.toggle("glass", ui.glass);
-  try {
-    const win = getCurrentWindow();
-    if (ui.glass) {
-      await win.setEffects({
-        effects: [Effect.Acrylic],
-        color: ui.dark
-          ? { red: 26, green: 26, blue: 30, alpha: 128 }
-          : { red: 248, green: 248, blue: 252, alpha: 128 },
-      });
-    } else {
-      await win.clearEffects();
-    }
-  } catch (err) {
-    console.warn("窗口特效不可用", err);
-  }
 }

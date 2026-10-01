@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import Sidebar from "./components/Sidebar.vue";
 import PlayerBar from "./components/PlayerBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
@@ -24,6 +25,11 @@ const views = {
 
 const view = computed(() => views[ui.view]);
 
+const ambientImg = computed(() =>
+  current.value?.cover ? `url("${convertFileSrc(current.value.cover)}")` : "",
+);
+const ambientKey = computed(() => current.value?.id ?? "none");
+
 onMounted(() => {
   initTheme();
   initGlass();
@@ -33,6 +39,13 @@ onMounted(() => {
 
 <template>
   <div class="app">
+    <div v-if="ui.glass" class="ambient">
+      <Transition name="amb">
+        <div :key="ambientKey" class="ambient-img" :style="{ backgroundImage: ambientImg }"></div>
+      </Transition>
+      <div class="ambient-scrim"></div>
+    </div>
+
     <div class="shell">
       <Sidebar />
       <main class="content">
