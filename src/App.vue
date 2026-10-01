@@ -9,7 +9,7 @@ import AlbumDetailView from "./views/AlbumDetailView.vue";
 import ArtistsView from "./views/ArtistsView.vue";
 import SongsView from "./views/SongsView.vue";
 import SearchView from "./views/SearchView.vue";
-import { ui, initTheme } from "./stores/ui";
+import { ui, initTheme, initGlass } from "./stores/ui";
 import { initLibrary } from "./stores/library";
 import { current } from "./stores/player";
 
@@ -26,6 +26,7 @@ const view = computed(() => views[ui.view]);
 
 onMounted(() => {
   initTheme();
+  initGlass();
   void initLibrary();
 });
 </script>

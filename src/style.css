@@ -179,3 +179,77 @@ img {
 .primary-pill:hover {
   background: var(--accent-hover);
 }
+
+/* ===== 液态玻璃外观 =====
+   窗口透明 + Windows Acrylic 提供系统级背景模糊,
+   应用内各面板换成半透明玻璃材质(html.glass 时生效)。 */
+html.glass,
+html.glass body {
+  background: transparent;
+}
+
+html.glass .content {
+  background: rgba(255, 255, 255, 0.38);
+}
+html.dark.glass .content {
+  background: rgba(16, 16, 20, 0.55);
+}
+
+html.glass .sidebar {
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(28px) saturate(1.6);
+  border-right: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+html.dark.glass .sidebar {
+  background: rgba(22, 22, 28, 0.58);
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+html.glass .playerbar {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(30px) saturate(1.7);
+  border-top: 1px solid rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+html.dark.glass .playerbar {
+  background: rgba(20, 20, 25, 0.6);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* 艺人页滚动吸顶表头:玻璃下也要能盖住滚过的内容 */
+html.glass .detail .view-head {
+  background: rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(24px) saturate(1.6);
+  border-radius: 10px;
+}
+html.dark.glass .detail .view-head {
+  background: rgba(22, 22, 28, 0.42);
+}
+
+html.glass .search {
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+html.dark.glass .search {
+  background: rgba(255, 255, 255, 0.1);
+}
+html.glass .chip {
+  background: rgba(255, 255, 255, 0.48);
+}
+html.dark.glass .chip {
+  background: rgba(255, 255, 255, 0.1);
+}
+html.glass .ghost-pill {
+  background: rgba(255, 255, 255, 0.5);
+}
+html.dark.glass .ghost-pill {
+  background: rgba(255, 255, 255, 0.12);
+}
+/* 玻璃模式下专辑卡片封面下的白色托盘不再需要 */
+html.glass .cover {
+  background: rgba(255, 255, 255, 0.2);
+}
+

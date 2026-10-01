@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { ui, go, toggleDark } from "../stores/ui";
+import { ui, go, toggleDark, toggleGlass } from "../stores/ui";
 import { lib, addFolder, rescan } from "../stores/library";
 
 const navItems = [
@@ -84,6 +84,13 @@ const progressText = computed(() =>
           <path d="M20 4.5V9h-4.5" />
         </svg>
         <span>重新扫描</span>
+      </button>
+      <button class="action" :title="ui.glass ? '关闭液态玻璃' : '开启液态玻璃'" @click="toggleGlass">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+          <path d="M12 3.5c3.2 3.7 5.5 6.7 5.5 9.5a5.5 5.5 0 1 1-11 0c0-2.8 2.3-5.8 5.5-9.5z" />
+          <path d="M9.5 13.5a2.6 2.6 0 0 0 2 2.6" stroke-linecap="round" />
+        </svg>
+        <span>{{ ui.glass ? "原生外观" : "液态玻璃" }}</span>
       </button>
       <button class="action" :title="ui.dark ? '切换为浅色' : '切换为深色'" @click="toggleDark">
         <svg v-if="!ui.dark" class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
