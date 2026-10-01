@@ -1,0 +1,54 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export interface Track {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist: string;
+  trackNo: number | null;
+  discNo: number | null;
+  year: number | null;
+  genre: string | null;
+  duration: number;
+  path: string;
+  cover: string | null;
+  hasLyrics: boolean;
+  lrcPath: string | null;
+  addedAt: number;
+  mtime: number;
+  size: number;
+}
+
+export interface Library {
+  version: number;
+  folders: string[];
+  tracks: Track[];
+}
+
+export interface ScanReport {
+  added: number;
+  updated: number;
+  removed: number;
+  total: number;
+  errors: number;
+}
+
+export interface LyricLine {
+  timeMs: number;
+  text: string;
+}
+
+export interface LyricsPayload {
+  synced: LyricLine[] | null;
+  plain: string | null;
+}
+
+export const api = {
+  getLibrary: () => invoke<Library>("get_library"),
+  pickFolder: () => invoke<string | null>("pick_music_folder"),
+  addFolder: (path: string) => invoke<void>("add_folder", { path }),
+  removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
+  scan: () => invoke<ScanReport>("scan_library"),
+  getLyrics: (id: string) => invoke<LyricsPayload | null>("get_lyrics", { id }),
+};
