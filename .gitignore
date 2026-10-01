@@ -31,3 +31,4 @@ src-tauri/icons/ios/
 
 # Test fixture output
 test-music/
+.ref/

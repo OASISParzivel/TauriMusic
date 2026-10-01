@@ -2,7 +2,7 @@
 import { computed, onMounted } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import Sidebar from "./components/Sidebar.vue";
-import PlayerBar from "./components/PlayerBar.vue";
+import TopBar from "./components/TopBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
 import HomeView from "./views/HomeView.vue";
 import AlbumsView from "./views/AlbumsView.vue";
@@ -58,13 +58,13 @@ onMounted(() => {
     </div>
 
     <div class="shell">
+      <TopBar />
       <Sidebar />
       <main class="content">
         <Transition name="page" mode="out-in">
           <component :is="view" :key="pageKey" />
         </Transition>
       </main>
-      <PlayerBar />
     </div>
 
     <Transition name="np">
@@ -82,7 +82,7 @@ onMounted(() => {
 .shell {
   display: grid;
   grid-template-columns: 232px 1fr;
-  grid-template-rows: 1fr 86px;
+  grid-template-rows: 48px 1fr;
   height: 100%;
 }
 .content {

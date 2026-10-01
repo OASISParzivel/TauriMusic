@@ -92,7 +92,7 @@ const progressText = computed(() =>
         </svg>
         <span>{{ ui.glass ? "原生外观" : "液态玻璃" }}</span>
       </button>
-      <button v-if="!ui.glass" class="action" :title="ui.dark ? '切换为浅色' : '切换为深色'" @click="toggleDark">
+      <button class="action" :title="ui.dark ? '切换为浅色' : '切换为深色'" @click="toggleDark">
         <svg v-if="!ui.dark" class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
           <path d="M20 13.6A8 8 0 0 1 10.4 4 8 8 0 1 0 20 13.6z" />
         </svg>
@@ -108,7 +108,8 @@ const progressText = computed(() =>
 
 <style scoped>
 .sidebar {
-  grid-row: 1 / 3;
+  grid-row: 2;
+  grid-column: 1;
   display: flex;
   flex-direction: column;
   background: var(--bg-2);
@@ -184,12 +185,22 @@ nav {
 }
 .nav-item.active {
   background: var(--active);
-  color: var(--accent);
+  color: var(--text);
 }
 .nav-item .ico {
   width: 18px;
   height: 18px;
   flex: none;
+  color: var(--text-2);
+}
+.nav-item.active .ico {
+  color: var(--text);
+}
+/* 玻璃皮肤下恢复红色图标点缀 */
+html.glass .nav-item .ico {
+  color: var(--accent);
+}
+html.glass .nav-item.active {
   color: var(--accent);
 }
 

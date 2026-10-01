@@ -1,4 +1,5 @@
 import { reactive, watchEffect } from "vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type ViewName = "home" | "albums" | "album" | "artists" | "songs" | "search";
 
@@ -47,6 +48,12 @@ export function initTheme(): void {
   ui.dark = saved ? saved === "1" : window.matchMedia("(prefers-color-scheme: dark)").matches;
   watchEffect(() => {
     document.documentElement.classList.toggle("dark", ui.dark);
+    // 原生窗口边框/标题区颜色同步,避免和页面主题脱节
+    try {
+      void getCurrentWindow().setTheme(ui.dark ? "dark" : "light");
+    } catch {
+      /* 浏览器调试环境无窗口 */
+    }
   });
 }
 

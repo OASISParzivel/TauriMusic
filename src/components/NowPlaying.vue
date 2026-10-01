@@ -198,7 +198,7 @@ function onSeek(e: Event): void {
 
 .close {
   position: absolute;
-  top: 14px;
+  top: 60px;
   right: 18px;
   z-index: 5;
   width: 34px;
