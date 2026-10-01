@@ -144,10 +144,9 @@ img {
 
 /* 视图通用骨架 */
 .view {
-  flex: 1;
-  min-height: 0;
+  height: 100%;
   overflow-y: auto;
-  padding: 24px 36px 48px;
+  padding: 28px 36px 48px;
 }
 .view-head {
   display: flex;
@@ -397,15 +396,14 @@ html.dark.glass .search {
   border-color: rgba(255, 255, 255, 0.12);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
-/* 玻璃下工具条页签 */
-html.glass .tab {
+html.glass .nav-item {
   border-radius: 999px;
 }
-html.glass .tab.active {
+html.glass .nav-item.active {
   background: rgba(255, 255, 255, 0.55);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 1px 3px rgba(0, 0, 0, 0.06);
 }
-html.dark.glass .tab.active {
+html.dark.glass .nav-item.active {
   background: rgba(255, 255, 255, 0.18);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
