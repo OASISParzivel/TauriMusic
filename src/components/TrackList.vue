@@ -49,7 +49,8 @@ function exportOne(t: Track): void {
       <span v-if="t.hasLyrics" class="badge">词</span>
       <button class="exp" title="导出为 TMC 音乐包" @click.stop="exportOne(t)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 4v9M8.5 9.5 12 13l3.5-3.5M5 17.5h14" />
+          <path d="M12 13.5V4M8.5 7.5 12 4l3.5 3.5" />
+          <path d="M5 15v2.6c0 .77.63 1.4 1.4 1.4h11.2c.77 0 1.4-.63 1.4-1.4V15" />
         </svg>
       </button>
       <span class="dur">{{ fmtTime(t.duration) }}</span>
