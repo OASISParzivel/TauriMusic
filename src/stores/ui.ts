@@ -21,6 +21,8 @@ interface UiState {
   glass: boolean;
   /** 全屏播放页(含歌词)是否打开 */
   nowPlayingOpen: boolean;
+  /** 首次启动使用声明 */
+  welcomeOpen: boolean;
   /** 设置弹窗 */
   settingsOpen: boolean;
   /** 关于弹窗 */
@@ -36,11 +38,23 @@ export const ui = reactive<UiState>({
   themeMode: "system",
   glass: false,
   nowPlayingOpen: false,
+  welcomeOpen: false,
   settingsOpen: false,
   aboutOpen: false,
 });
 
 const systemDark = ref(false);
+
+/** 首次启动:未同意过使用声明时弹出 */
+export function initWelcome(): void {
+  ui.welcomeOpen = localStorage.getItem("tm-welcome") !== "1";
+}
+
+/** 同意使用声明并记住,不再弹出 */
+export function acceptWelcome(): void {
+  localStorage.setItem("tm-welcome", "1");
+  ui.welcomeOpen = false;
+}
 
 function prefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;

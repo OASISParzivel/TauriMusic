@@ -6,6 +6,7 @@ import TopBar from "./components/TopBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import AboutModal from "./components/AboutModal.vue";
+import WelcomeModal from "./components/WelcomeModal.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import HomeView from "./views/HomeView.vue";
 import AlbumsView from "./views/AlbumsView.vue";
@@ -13,8 +14,9 @@ import AlbumDetailView from "./views/AlbumDetailView.vue";
 import ArtistsView from "./views/ArtistsView.vue";
 import SongsView from "./views/SongsView.vue";
 import SearchView from "./views/SearchView.vue";
-import { ui, initTheme, initGlass } from "./stores/ui";
+import { ui, initTheme, initGlass, initWelcome } from "./stores/ui";
 import { initLibrary, initDragImport } from "./stores/library";
+import { initShortcuts } from "./stores/shortcuts";
 import { current } from "./stores/player";
 
 const views = {
@@ -38,8 +40,10 @@ const ambientKey = computed(() => current.value?.id ?? "none");
 onMounted(() => {
   initTheme();
   initGlass();
+  initWelcome();
   void initLibrary();
   void initDragImport();
+  initShortcuts();
 });
 </script>
 
@@ -81,6 +85,9 @@ onMounted(() => {
     <Transition name="modal">
       <AboutModal v-if="ui.aboutOpen" />
     </Transition>
+    <Transition name="modal">
+      <WelcomeModal v-if="ui.welcomeOpen" />
+    </Transition>
 
     <ContextMenu />
   </div>
@@ -97,12 +104,18 @@ onMounted(() => {
   grid-template-columns: 232px 1fr;
   grid-template-rows: 48px 1fr;
   height: 100%;
+  /* 顶栏与侧栏共用的连续铬底,内容区以圆角纸面浮于其上(macOS 式) */
+  background: var(--bg-2);
 }
 .content {
   position: relative;
   overflow: hidden;
   background: var(--bg);
   min-width: 0;
+  border-top-left-radius: 14px;
+  box-shadow:
+    -1px -1px 0 var(--hairline),
+    -8px -4px 20px rgba(0, 0, 0, 0.05);
 }
 .fx-defs {
   position: absolute;

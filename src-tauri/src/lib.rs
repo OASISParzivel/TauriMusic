@@ -745,6 +745,33 @@ fn get_lyrics(id: String, state: State<AppState>) -> Option<lyrics::LyricsPayloa
     lyrics::find_in_library(&id, &lib)
 }
 
+// ===== 资源占用(关于页展示) =====
+
+static RES_SYS: std::sync::OnceLock<Mutex<sysinfo::System>> = std::sync::OnceLock::new();
+
+/// 主进程资源占用:内存 MB + CPU 百分比(CPU 为两次调用间的均值,首次为 0)
+#[derive(serde::Serialize)]
+struct ResourceUsage {
+    memory_mb: f64,
+    cpu: f32,
+}
+
+#[tauri::command]
+fn get_resource_usage() -> ResourceUsage {
+    let sys_mutex = RES_SYS.get_or_init(|| Mutex::new(sysinfo::System::new()));
+    let mut sys = sys_mutex.lock().unwrap_or_else(|e| e.into_inner());
+    let (memory_mb, cpu) = match sysinfo::get_current_pid() {
+        Ok(pid) => {
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+            sys.process(pid)
+                .map(|p| (p.memory() as f64 / 1048576.0, p.cpu_usage()))
+                .unwrap_or((0.0, 0.0))
+        }
+        Err(_) => (0.0, 0.0),
+    };
+    ResourceUsage { memory_mb, cpu }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -828,7 +855,8 @@ pub fn run() {
             netease_enrich_album,
             get_associations,
             set_association,
-            delete_tracks
+            delete_tracks,
+            get_resource_usage
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

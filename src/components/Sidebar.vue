@@ -100,8 +100,7 @@ const statusText = computed(() =>
   grid-column: 1;
   display: flex;
   flex-direction: column;
-  background: var(--bg-2);
-  border-right: 1px solid var(--hairline);
+  background: transparent; /* 与顶栏共用 shell 的连续铬底 */
   padding: 14px 12px 14px;
   gap: 4px;
   min-height: 0;

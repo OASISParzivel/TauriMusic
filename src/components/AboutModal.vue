@@ -1,14 +1,25 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import Modal from "./Modal.vue";
 import { ui } from "../stores/ui";
+import { api, type ResourceUsage } from "../api";
 
 const AUTHOR_MAIL = "O_Art3mis@163.com";
 
 const version = ref("0.1.0");
 const copied = ref(false);
+const usage = ref<ResourceUsage | null>(null);
 let copiedTimer = 0;
+let usageTimer = 0;
+
+async function refreshUsage(): Promise<void> {
+  try {
+    usage.value = await api.getResourceUsage();
+  } catch {
+    /* 静默失败,不影响关于页 */
+  }
+}
 
 onMounted(async () => {
   try {
@@ -16,7 +27,11 @@ onMounted(async () => {
   } catch {
     /* 保持默认版本号 */
   }
+  void refreshUsage();
+  usageTimer = window.setInterval(refreshUsage, 2000);
 });
+
+onUnmounted(() => window.clearInterval(usageTimer));
 
 async function copyMail(): Promise<void> {
   try {
@@ -60,6 +75,10 @@ async function copyMail(): Promise<void> {
       <a class="mail" :href="`mailto:${AUTHOR_MAIL}`">{{ AUTHOR_MAIL }}</a>
       <button class="mini" @click="copyMail">{{ copied ? "已复制" : "复制" }}</button>
     </div>
+
+    <p v-if="usage" class="res">
+      内存 {{ usage.memory_mb.toFixed(1) }} MB · CPU {{ usage.cpu.toFixed(1) }}%
+    </p>
 
     <p class="tech">Tauri 2 · Vue 3 · Rust · lofty</p>
   </Modal>
@@ -174,10 +193,18 @@ async function copyMail(): Promise<void> {
   background: var(--hover);
 }
 
-.tech {
+.res {
   font-size: 11.5px;
   color: var(--text-3);
   margin-top: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.tech {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-top: 6px;
   text-align: center;
 }
 </style>

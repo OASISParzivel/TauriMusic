@@ -62,6 +62,13 @@ export interface AssocState {
   registered: boolean;
 }
 
+export interface ResourceUsage {
+  /** 主进程内存占用(MB) */
+  memory_mb: number;
+  /** CPU 占用(%),两次查询间的均值 */
+  cpu: number;
+}
+
 export const api = {
   getLibrary: () => invoke<Library>("get_library"),
   pickFolder: () => invoke<string | null>("pick_music_folder"),
@@ -80,4 +87,5 @@ export const api = {
   getAssociations: () => invoke<AssocState[]>("get_associations"),
   setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),
   deleteTracks: (ids: string[]) => invoke<number>("delete_tracks", { ids }),
+  getResourceUsage: () => invoke<ResourceUsage>("get_resource_usage"),
 };

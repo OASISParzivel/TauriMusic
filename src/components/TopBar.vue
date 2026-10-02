@@ -152,7 +152,7 @@ const volFill = computed(() => `${player.volume * 100}%`);
   gap: 16px;
   height: 48px;
   padding-left: 16px;
-  background: var(--bg);
+  background: transparent; /* 与侧栏共用 shell 的连续铬底 */
   border-bottom: 1px solid var(--hairline);
   user-select: none;
 }
