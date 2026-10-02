@@ -78,8 +78,12 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
 
         let cached = by_path.get(&path_str).cloned();
         if let Some(prev) = &cached {
-            // 文件未变化:直接复用旧记录,不重复解析
-            if (prev.mtime - mtime).abs() < 0.5 && prev.size == size {
+            // 文件未变化:直接复用旧记录,不重复解析。
+            // 旁路文件(cover.* / 同名 .lrc)比音频新时也算变更——在线匹配只新增旁路文件
+            if (prev.mtime - mtime).abs() < 0.5
+                && prev.size == size
+                && sidecar_mtime(path) <= prev.mtime + 0.5
+            {
                 result.push(prev.clone());
                 continue;
             }
@@ -284,6 +288,23 @@ fn parse_track(
 
 fn parse_slashed_number(s: String) -> Option<u32> {
     s.split('/').next()?.trim().parse().ok()
+}
+
+/// 音频旁路元数据文件的最新修改时间(封面 cover.* 与同名 .lrc),无则 0
+fn sidecar_mtime(path: &Path) -> f64 {
+    let Some(parent) = path.parent() else { return 0.0 };
+    let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+        return 0.0;
+    };
+    ["cover.jpg", "cover.jpeg", "cover.png", "cover.webp"]
+        .iter()
+        .map(|n| parent.join(n))
+        .chain(std::iter::once(parent.join(format!("{stem}.lrc"))))
+        .filter_map(|p| fs::metadata(p).ok())
+        .filter_map(|m| m.modified().ok())
+        .filter_map(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .fold(0.0, f64::max)
 }
 
 fn hash_str(s: &str) -> u64 {

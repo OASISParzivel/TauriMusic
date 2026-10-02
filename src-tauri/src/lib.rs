@@ -301,6 +301,15 @@ async fn netease_enrich_album(
 
 fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<NeteaseReport, String> {
     let state = app.state::<AppState>();
+
+    // 触碰音频文件 mtime,让增量扫描感知旁路元数据(cover.jpg/.lrc)已更新
+    fn touch_audio(path: &Path) {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+    }
+
     let tracks: Vec<model::Track> = {
         let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
         lib.tracks
@@ -334,6 +343,10 @@ fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<Ne
                         for d in dirs {
                             let _ = fs::write(d.join("cover.jpg"), &bytes);
                         }
+                        // 让该专辑所有无封面曲目在增量扫描中被重新解析
+                        for t in tracks.iter().filter(|t| t.cover.is_none()) {
+                            touch_audio(Path::new(&t.path));
+                        }
                         report.cover = true;
                     }
                     Err(_) => report.skipped += 1,
@@ -355,6 +368,7 @@ fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<Ne
                     .unwrap_or_else(|| "track".into());
                 let dest = parent.join(format!("{stem}.lrc"));
                 if fs::write(&dest, text).is_ok() {
+                    touch_audio(Path::new(&t.path));
                     report.lyrics += 1;
                 } else {
                     report.skipped += 1;
