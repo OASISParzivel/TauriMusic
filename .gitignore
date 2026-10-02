@@ -33,3 +33,6 @@ src-tauri/icons/ios/
 test-music/
 .ref/
 demo/
+
+# 打包产物(含版权音频,严禁入库)
+beyond/
