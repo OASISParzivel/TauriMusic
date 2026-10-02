@@ -417,6 +417,8 @@ html.glass .detail .view-head {
   backdrop-filter: blur(30px) saturate(1.7);
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.6);
+  padding: 10px 20px;
+  align-items: baseline;
 }
 html.dark.glass .detail .view-head {
   background: rgba(24, 24, 32, 0.5);
