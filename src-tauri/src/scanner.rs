@@ -150,6 +150,7 @@ fn parse_track(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     let path_str = path.to_string_lossy().to_string();
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
 
     // 标签缺失时回退到文件名,支持 "艺人 - 标题" 命名
     let mut title = get(&ItemKey::TrackTitle);
@@ -160,11 +161,9 @@ fn parse_track(
             title = Some(t.trim().to_string());
         }
     }
-    let title = title.unwrap_or_else(|| stem.clone());
-    let artist = artist.unwrap_or_else(|| "未知艺人".into());
-    let album = get(&ItemKey::AlbumTitle).unwrap_or_else(|| "未知专辑".into());
-    let album_artist = get(&ItemKey::AlbumArtist).unwrap_or_else(|| artist.clone());
-    let year = get(&ItemKey::Year)
+    let mut album = get(&ItemKey::AlbumTitle);
+    let mut album_artist = get(&ItemKey::AlbumArtist);
+    let mut year = get(&ItemKey::Year)
         .or_else(|| get(&ItemKey::RecordingDate))
         .and_then(|y| {
             y.chars()
@@ -175,12 +174,53 @@ fn parse_track(
                 .ok()
         })
         .filter(|&y| (1000..=3000).contains(&y));
-    let track_no = get(&ItemKey::TrackNumber).and_then(parse_slashed_number);
+    let mut track_no = get(&ItemKey::TrackNumber).and_then(parse_slashed_number);
     let disc_no = get(&ItemKey::DiscNumber).and_then(parse_slashed_number);
-    let genre = get(&ItemKey::Genre);
+    let mut genre = get(&ItemKey::Genre);
+
+    // TMC 音乐包元数据:同级 meta.json 只补齐标签缺失的字段,不覆盖内嵌标签
+    let meta_path = parent.join("meta.json");
+    if meta_path.is_file() {
+        if let Ok(v) =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&meta_path).unwrap_or_default())
+        {
+            let mget = |k: &str| -> Option<String> {
+                v.get(k)
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            };
+            title = title.or_else(|| mget("title"));
+            artist = artist.or_else(|| mget("artist"));
+            album = album.or_else(|| mget("album"));
+            album_artist = album_artist.or_else(|| mget("albumArtist"));
+            if year.is_none() {
+                year = mget("year")
+                    .and_then(|y| {
+                        y.chars()
+                            .take(4)
+                            .filter(|c| c.is_ascii_digit())
+                            .collect::<String>()
+                            .parse::<i32>()
+                            .ok()
+                    })
+                    .filter(|&y| (1000..=3000).contains(&y));
+            }
+            if track_no.is_none() {
+                track_no = mget("trackNo").and_then(parse_slashed_number);
+            }
+            if genre.is_none() {
+                genre = mget("genre");
+            }
+        }
+    }
+
+    let title = title.unwrap_or_else(|| stem.clone());
+    let artist = artist.unwrap_or_else(|| "未知艺人".into());
+    let album = album.unwrap_or_else(|| "未知专辑".into());
+    let album_artist = album_artist.unwrap_or_else(|| artist.clone());
 
     // 歌词:同名 .lrc 伴生文件,或内嵌歌词标签
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let lrc = parent.join(format!("{stem}.lrc"));
     let lrc_path = lrc
         .is_file()

@@ -60,4 +60,8 @@ export const api = {
   getImportDir: () => invoke<string>("get_import_dir"),
   openImportDir: () => invoke<string>("open_import_dir"),
   importPaths: (paths: string[]) => invoke<ImportReport>("import_paths", { paths }),
+  importTmc: (path: string) => invoke<string>("import_tmc", { path }),
+  exportTmc: (id: string, dest: string) => invoke<string>("export_tmc", { id, dest }),
+  pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
+  pickTmcDest: (defaultName: string) => invoke<string | null>("pick_tmc_dest", { defaultName }),
 };

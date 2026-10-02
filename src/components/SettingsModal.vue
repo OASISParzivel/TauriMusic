@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import Modal from "./Modal.vue";
 import { ui, setThemeMode, toggleGlass } from "../stores/ui";
-import { lib, openImportDir, addFolder, rescan } from "../stores/library";
+import { lib, openImportDir, addFolder, rescan, importTmcPick } from "../stores/library";
 
 const themeOptions = [
   { value: "system", label: "跟随系统" },
@@ -10,6 +10,8 @@ const themeOptions = [
 ] as const;
 
 const FORMAT_HINT = "支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持内嵌或同名 .lrc · 封面自动识别";
+const TMC_HINT =
+  "TMC 音乐包为标准 7z 压缩包:内含音频、同名 .lrc 歌词、cover.jpg/png 封面与 meta.json 元数据。把 .tmc 拖进窗口即可导入;在歌曲列表悬停某行可一键导出 TMC。";
 </script>
 
 <template>
@@ -54,6 +56,13 @@ const FORMAT_HINT = "支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持�
       </div>
       <p class="dir" :title="lib.importDir">{{ lib.importDir }}</p>
       <p class="hint">{{ FORMAT_HINT }}</p>
+      <div class="row">
+        <span class="row-label">TMC 音乐包</span>
+        <div class="btns">
+          <button class="mini" @click="importTmcPick">导入 TMC 文件</button>
+        </div>
+      </div>
+      <p class="hint">{{ TMC_HINT }}</p>
     </div>
 
     <div class="sec">资料库</div>

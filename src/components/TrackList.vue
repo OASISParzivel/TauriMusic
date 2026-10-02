@@ -2,6 +2,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
 import { current, fmtTime, playTrack } from "../stores/player";
+import { exportTrackTmc } from "../stores/library";
 
 const props = defineProps<{
   tracks: Track[];
@@ -15,6 +16,10 @@ const props = defineProps<{
 
 function play(t: Track): void {
   playTrack(t, props.tracks);
+}
+
+function exportOne(t: Track): void {
+  void exportTrackTmc(t.id, t.title, t.artist);
 }
 </script>
 
@@ -42,6 +47,11 @@ function play(t: Track): void {
       </span>
       <span v-if="showAlbum" class="al" :title="t.album">{{ t.album }}</span>
       <span v-if="t.hasLyrics" class="badge">词</span>
+      <button class="exp" title="导出为 TMC 音乐包" @click.stop="exportOne(t)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 4v9M8.5 9.5 12 13l3.5-3.5M5 17.5h14" />
+        </svg>
+      </button>
       <span class="dur">{{ fmtTime(t.duration) }}</span>
     </div>
   </div>
@@ -173,6 +183,30 @@ function play(t: Track): void {
   padding: 0 4px;
   line-height: 15px;
   opacity: 0.85;
+}
+
+.exp {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+.exp svg {
+  width: 15px;
+  height: 15px;
+}
+.row:hover .exp {
+  opacity: 1;
+}
+.exp:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
 .dur {

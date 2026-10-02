@@ -119,6 +119,165 @@ fn copy_into_import_dir(src: &Path, import_dir: &Path) -> Result<bool, String> {
         .map_err(|e| format!("复制 {} 失败: {e}", src.display()))
 }
 
+// ===== TMC 音乐包(.tmc = 标准 7z:音频 + 同名 .lrc 歌词 + cover 封面 + meta.json) =====
+
+fn sanitize_name(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => out.push('_'),
+            c if (c as u32) < 32 => {}
+            c => out.push(c),
+        }
+    }
+    let t = out.trim().to_string();
+    if t.is_empty() { "track".into() } else { t }
+}
+
+/// 解包 .tmc 到导入目录下的同名子目录,由扫描器拾取(meta.json 会补齐缺失标签)
+#[tauri::command]
+fn import_tmc(path: String, state: State<AppState>) -> Result<String, String> {
+    let src = PathBuf::from(&path);
+    if !src.is_file() {
+        return Err("文件不存在".into());
+    }
+    let import_dir = ensure_import_dir(&state)?;
+    let stem = src
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "tmc".into());
+    let dest = import_dir.join(&stem);
+    if dest.exists() {
+        fs::remove_dir_all(&dest).map_err(|e| format!("清理旧目录失败: {e}"))?;
+    }
+    fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    sevenz_rust::decompress_file(&src, &dest).map_err(|e| format!("解包失败: {e}"))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// 把曲库中的一首歌打包导出为 .tmc
+#[tauri::command]
+async fn export_tmc(id: String, dest: String, app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || export_tmc_blocking(&id, &dest, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<String, String> {
+    use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+
+    let state = app.state::<AppState>();
+    let track = {
+        let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        lib.tracks.iter().find(|t| t.id == id).cloned()
+    };
+    let Some(t) = track else {
+        return Err("曲目不存在".into());
+    };
+    let audio = Path::new(&t.path);
+    if !audio.is_file() {
+        return Err(format!("音频文件不存在: {}", t.path));
+    }
+    let ext = audio
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase().to_string())
+        .unwrap_or_else(|| "mp3".into());
+    let stem = sanitize_name(&t.title);
+
+    // meta.json 先落盘,再随音频/歌词/封面一起打包
+    let tmp = std::env::temp_dir().join(format!("taurimusic-export-{}", std::process::id()));
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let meta_path = tmp.join("meta.json");
+    let meta = serde_json::json!({
+        "title": t.title,
+        "artist": t.artist,
+        "album": t.album,
+        "albumArtist": t.album_artist,
+        "year": t.year,
+        "trackNo": t.track_no,
+        "genre": t.genre,
+    });
+    fs::write(&meta_path, serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+
+    let mut dest_path = PathBuf::from(dest);
+    if dest_path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase() != "tmc")
+        .unwrap_or(true)
+    {
+        dest_path.set_extension("tmc");
+    }
+    if let Some(parent) = dest_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let mut writer = SevenZWriter::create(&dest_path).map_err(|e| format!("创建 TMC 失败: {e}"))?;
+    writer
+        .push_archive_entry(
+            SevenZArchiveEntry::from_path(audio, format!("{stem}.{ext}")),
+            fs::File::open(audio).ok(),
+        )
+        .map_err(|e| e.to_string())?;
+    if let Some(lrc) = &t.lrc_path {
+        let lrc_path = Path::new(lrc);
+        if lrc_path.is_file() {
+            writer
+                .push_archive_entry(
+                    SevenZArchiveEntry::from_path(lrc_path, format!("{stem}.lrc")),
+                    fs::File::open(lrc_path).ok(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(cover) = &t.cover {
+        let cover_path = Path::new(cover);
+        if cover_path.is_file() {
+            let cext = cover_path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase().to_string())
+                .unwrap_or_else(|| "jpg".into());
+            let cname = if cext == "png" { "cover.png" } else { "cover.jpg" };
+            writer
+                .push_archive_entry(
+                    SevenZArchiveEntry::from_path(cover_path, cname.to_string()),
+                    fs::File::open(cover_path).ok(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    writer
+        .push_archive_entry(
+            SevenZArchiveEntry::from_path(&meta_path, "meta.json".to_string()),
+            fs::File::open(&meta_path).ok(),
+        )
+        .map_err(|e| e.to_string())?;
+    writer.finish().map_err(|e| format!("写入 TMC 失败: {e}"))?;
+    let _ = fs::remove_file(&meta_path);
+    Ok(dest_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn pick_tmc_file() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("选择 TMC 音乐包")
+        .add_filter("TMC 音乐包 (*.tmc)", &["tmc"])
+        .pick_file()
+        .await
+        .map(|f| f.path().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn pick_tmc_dest(default_name: String) -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("导出 TMC 音乐包")
+        .add_filter("TMC 音乐包 (*.tmc)", &["tmc"])
+        .set_file_name(&format!("{default_name}.tmc"))
+        .save_file()
+        .await
+        .map(|f| f.path().to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn get_library(state: State<AppState>) -> Library {
     state.lib.lock().map(|l| l.clone()).unwrap_or_default()
@@ -204,7 +363,11 @@ pub fn run() {
             get_lyrics,
             get_import_dir,
             open_import_dir,
-            import_paths
+            import_paths,
+            import_tmc,
+            export_tmc,
+            pick_tmc_file,
+            pick_tmc_dest
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

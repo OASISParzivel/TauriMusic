@@ -66,7 +66,7 @@ export async function initLibrary(): Promise<void> {
   }
 }
 
-/** 监听文件拖进窗口:整个文件夹登记为扫描来源,散装音频/歌词复制进导入目录 */
+/** 监听文件拖进窗口:.tmc 音乐包走解包导入,文件夹登记扫描,散装音频/歌词复制进导入目录 */
 export async function initDragImport(): Promise<void> {
   try {
     await getCurrentWebview().onDragDropEvent((e) => {
@@ -79,21 +79,64 @@ export async function initDragImport(): Promise<void> {
   }
 }
 
-export async function importDropped(paths: string[]): Promise<void> {
-  try {
-    const r = await api.importPaths(paths);
-    const parts: string[] = [];
-    if (r.filesCopied) parts.push(`导入 ${r.filesCopied} 个文件`);
-    if (r.foldersAdded) parts.push(`添加 ${r.foldersAdded} 个文件夹`);
-    if (r.skipped) parts.push(`跳过 ${r.skipped} 个不支持`);
-    lib.importStatus = parts.length ? parts.join(" · ") : "没有可导入的文件";
-  } catch (err) {
-    console.error("导入失败", err);
-    lib.importStatus = "导入失败";
-  }
+function flashStatus(text: string): void {
+  lib.importStatus = text;
   window.clearTimeout(importStatusTimer);
   importStatusTimer = window.setTimeout(() => (lib.importStatus = ""), 6000);
+}
+
+export async function importDropped(paths: string[]): Promise<void> {
+  const tmc = paths.filter((p) => p.toLowerCase().endsWith(".tmc"));
+  const rest = paths.filter((p) => !p.toLowerCase().endsWith(".tmc"));
+  const parts: string[] = [];
+  if (tmc.length) {
+    let ok = 0;
+    let fail = 0;
+    for (const p of tmc) {
+      try {
+        await api.importTmc(p);
+        ok++;
+      } catch (err) {
+        console.error("导入 TMC 失败", err);
+        fail++;
+      }
+    }
+    parts.push(ok ? `导入 ${ok} 个音乐包${fail ? ` · ${fail} 个失败` : ""}` : "音乐包导入失败");
+  }
+  if (rest.length) {
+    try {
+      const r = await api.importPaths(rest);
+      if (r.filesCopied) parts.push(`导入 ${r.filesCopied} 个文件`);
+      if (r.foldersAdded) parts.push(`添加 ${r.foldersAdded} 个文件夹`);
+      if (r.skipped) parts.push(`跳过 ${r.skipped} 个不支持`);
+    } catch (err) {
+      console.error("导入失败", err);
+      parts.push("导入失败");
+    }
+  }
+  flashStatus(parts.length ? parts.join(" · ") : "没有可导入的文件");
   await rescan();
+}
+
+/** 从文件选择器导入 .tmc 音乐包(设置弹窗入口) */
+export async function importTmcPick(): Promise<void> {
+  const path = await api.pickTmcFile();
+  if (!path) return;
+  await importDropped([path]);
+}
+
+/** 把一首歌导出为 .tmc 音乐包(歌曲列表行内入口) */
+export async function exportTrackTmc(id: string, title: string, artist: string): Promise<void> {
+  const dest = await api.pickTmcDest(`${title} - ${artist}`);
+  if (!dest) return;
+  try {
+    const real = await api.exportTmc(id, dest);
+    const name = real.split(/[\\/]/).pop() ?? real;
+    flashStatus(`已导出 ${name}`);
+  } catch (err) {
+    console.error("导出 TMC 失败", err);
+    flashStatus("导出失败");
+  }
 }
 
 export async function openImportDir(): Promise<void> {
