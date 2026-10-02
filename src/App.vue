@@ -6,6 +6,7 @@ import TopBar from "./components/TopBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import AboutModal from "./components/AboutModal.vue";
+import ContextMenu from "./components/ContextMenu.vue";
 import HomeView from "./views/HomeView.vue";
 import AlbumsView from "./views/AlbumsView.vue";
 import AlbumDetailView from "./views/AlbumDetailView.vue";
@@ -80,6 +81,8 @@ onMounted(() => {
     <Transition name="modal">
       <AboutModal v-if="ui.aboutOpen" />
     </Transition>
+
+    <ContextMenu />
   </div>
 </template>
 

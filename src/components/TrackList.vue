@@ -4,6 +4,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
 import { current, fmtTime, playTrack } from "../stores/player";
 import { exportTrackTmc, deleteTracks } from "../stores/library";
+import { openAlbum, openArtist } from "../stores/ui";
+import { openCtx } from "../stores/context";
 
 const props = defineProps<{
   tracks: Track[];
@@ -37,6 +39,17 @@ function onDelete(t: Track): void {
   confirmingId.value = null;
   void deleteTracks([t.id]);
 }
+
+/** 歌曲右键菜单 */
+function rowMenu(e: MouseEvent, t: Track): void {
+  openCtx(e, [
+    { label: "播放", icon: "play", action: () => play(t) },
+    { label: "查看专辑", icon: "album", action: () => openAlbum(`${t.albumArtist || t.artist}\u{1}${t.album}`) },
+    { label: "查看艺人", icon: "artist", action: () => openArtist(t.artist) },
+    { label: "导出为 TMC 音乐包", icon: "export", action: () => exportOne(t) },
+    { label: "删除(移入回收站)", icon: "delete", danger: true, action: () => void deleteTracks([t.id]) },
+  ]);
+}
 </script>
 
 <template>
@@ -47,6 +60,7 @@ function onDelete(t: Track): void {
       class="row"
       :class="{ current: t.id === current?.id }"
       @click="play(t)"
+      @contextmenu="rowMenu($event, t)"
     >
       <span v-if="showIndex" class="idx">
         <span class="num">{{ t.trackNo ?? i + 1 }}</span>
