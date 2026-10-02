@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { player, current, toggle, next, prev, setVolume, cycleRepeat } from "../stores/player";
+import { player, current, toggle, next, prev, setVolume, cycleMode, MODE_LABEL } from "../stores/player";
 import { ui } from "../stores/ui";
 
 const appWin = getCurrentWindow();
@@ -37,14 +37,37 @@ const volFill = computed(() => `${player.volume * 100}%`);
 
     <div class="center">
       <div class="controls">
-        <button class="t-btn" :class="{ on: player.shuffle }" title="随机播放" @click="player.shuffle = !player.shuffle">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <button class="t-btn" :class="{ on: player.mode !== 'seq' }" :title="MODE_LABEL[player.mode]" @click="cycleMode()">
+          <!-- 顺序播放 -->
+          <svg v-if="player.mode === 'seq'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 12h11" />
+            <path d="m12 8 4 4-4 4" />
+            <path d="M20 5v14" />
+          </svg>
+          <!-- 列表循环 -->
+          <svg v-else-if="player.mode === 'loop'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m17 2.5 3.5 3.5-3.5 3.5" />
+            <path d="M3.5 11.5v-1a4.5 4.5 0 0 1 4.5-4.5h12" />
+            <path d="m7 21.5-3.5-3.5L7 14.5" />
+            <path d="M20.5 12.5v1a4.5 4.5 0 0 1-4.5 4.5H4" />
+          </svg>
+          <!-- 单曲循环 -->
+          <svg v-else-if="player.mode === 'one'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m17 2.5 3.5 3.5-3.5 3.5" />
+            <path d="M3.5 11.5v-1a4.5 4.5 0 0 1 4.5-4.5h12" />
+            <path d="m7 21.5-3.5-3.5L7 14.5" />
+            <path d="M20.5 12.5v1a4.5 4.5 0 0 1-4.5 4.5H4" />
+            <path d="M10.5 9.5 12 8.6V15" stroke-width="2" />
+          </svg>
+          <!-- 随机播放 -->
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M2.5 18h1.6c1.3 0 2.6-.6 3.4-1.7l6-8.6c.8-1.1 2.1-1.7 3.4-1.7h3.1" />
             <path d="m18.5 2.5 3 3.5-3 3.5" />
             <path d="M2.5 6h1.6c1.5 0 2.9.9 3.7 2.2" />
             <path d="M20 18h-4.1c-1.3 0-2.5-.7-3.3-1.8l-.6-.8" />
             <path d="m18.5 14.5 3 3.5-3 3.5" />
           </svg>
+          <span v-if="player.mode === 'one'" class="badge">1</span>
         </button>
         <button class="t-btn big" title="上一曲" :disabled="!current" @click="prev()">
           <svg viewBox="0 0 24 24">
@@ -65,15 +88,6 @@ const volFill = computed(() => `${player.volume * 100}%`);
             <path d="M17 5.8v12.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
             <path d="M5.5 6.3v11.4L14.6 12z" fill="currentColor" />
           </svg>
-        </button>
-        <button class="t-btn" :class="{ on: player.repeat !== 'off' }" title="循环模式" @click="cycleRepeat()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m17 2.5 3.5 3.5-3.5 3.5" />
-            <path d="M3.5 11.5v-1a4.5 4.5 0 0 1 4.5-4.5h12" />
-            <path d="m7 21.5-3.5-3.5L7 14.5" />
-            <path d="M20.5 12.5v1a4.5 4.5 0 0 1-4.5 4.5H4" />
-          </svg>
-          <span v-if="player.repeat === 'one'" class="badge">1</span>
         </button>
       </div>
 

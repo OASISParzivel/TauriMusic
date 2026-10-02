@@ -2,7 +2,16 @@ import { computed, reactive } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
 
-export type RepeatMode = "off" | "all" | "one";
+/** 播放模式:互斥单选,一键循环切换 */
+export type PlayMode = "seq" | "loop" | "one" | "shuffle";
+
+export const MODE_ORDER: PlayMode[] = ["seq", "loop", "one", "shuffle"];
+export const MODE_LABEL: Record<PlayMode, string> = {
+  seq: "顺序播放",
+  loop: "列表循环",
+  one: "单曲循环",
+  shuffle: "随机播放",
+};
 
 interface PlayerState {
   queue: Track[];
@@ -11,8 +20,7 @@ interface PlayerState {
   position: number;
   duration: number;
   volume: number;
-  shuffle: boolean;
-  repeat: RepeatMode;
+  mode: PlayMode;
 }
 
 export const player = reactive<PlayerState>({
@@ -22,8 +30,7 @@ export const player = reactive<PlayerState>({
   position: 0,
   duration: 0,
   volume: Number(localStorage.getItem("tm-vol") ?? "1"),
-  shuffle: false,
-  repeat: "off",
+  mode: "seq",
 });
 
 export const current = computed<Track | null>(() => player.queue[player.index] ?? null);
@@ -99,32 +106,37 @@ function replay(): void {
   void a.play().catch(() => {});
 }
 
+function stop(): void {
+  const a = ensureAudio();
+  a.pause();
+  a.currentTime = 0;
+}
+
 export function next(manual = true): void {
   const n = player.queue.length;
   if (n === 0) return;
+  const mode = player.mode;
 
-  if (player.repeat === "one" && !manual) {
+  if (mode === "one" && !manual) {
     replay();
     return;
   }
   if (n === 1) {
-    if (manual) replay();
+    if (manual || mode === "loop") replay();
     return;
   }
 
   let idx: number;
-  if (player.shuffle) {
+  if (mode === "shuffle") {
     do {
       idx = Math.floor(Math.random() * n);
     } while (idx === player.index);
   } else {
     idx = player.index + 1;
     if (idx >= n) {
-      if (player.repeat === "all" || manual) idx = 0;
+      if (mode === "loop" || manual) idx = 0;
       else {
-        const a = ensureAudio();
-        a.pause();
-        a.currentTime = 0;
+        stop();
         return;
       }
     }
@@ -142,13 +154,13 @@ export function prev(): void {
     return;
   }
   let idx = player.index - 1;
-  if (idx < 0) idx = player.repeat === "all" ? n - 1 : 0;
+  if (idx < 0) idx = player.mode === "loop" ? n - 1 : 0;
   player.index = idx;
   load(player.queue[idx]);
 }
 
 function onEnded(): void {
-  if (player.repeat === "one") {
+  if (player.mode === "one") {
     replay();
     return;
   }
@@ -170,8 +182,10 @@ export function setVolume(v: number): void {
   if (audio) audio.volume = clamped;
 }
 
-export function cycleRepeat(): void {
-  player.repeat = player.repeat === "off" ? "all" : player.repeat === "all" ? "one" : "off";
+/** 顺序播放 → 列表循环 → 单曲循环 → 随机播放 → 顺序播放 */
+export function cycleMode(): void {
+  const i = MODE_ORDER.indexOf(player.mode);
+  player.mode = MODE_ORDER[(i + 1) % MODE_ORDER.length];
 }
 
 export function fmtTime(s: number): string {

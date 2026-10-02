@@ -61,6 +61,17 @@ export async function initLibrary(): Promise<void> {
     lib.scanTotal = e.payload.total;
   });
 
+  // 后端处理"打开方式"/命令行导入完成后刷新曲库
+  void listen("library-changed", async () => {
+    try {
+      const data = await api.getLibrary();
+      lib.tracks = data.tracks;
+      lib.folders = data.folders;
+    } catch (err) {
+      console.error("刷新曲库失败", err);
+    }
+  });
+
   if (lib.folders.length > 0) {
     void rescan();
   }

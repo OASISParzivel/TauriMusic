@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { onMounted, ref } from "vue";
 import Modal from "./Modal.vue";
 import { ui, setThemeMode, toggleGlass } from "../stores/ui";
 import { lib, openImportDir, addFolder, rescan, importTmcPick } from "../stores/library";
+import { api, type AssocState } from "../api";
 
 const themeOptions = [
   { value: "system", label: "跟随系统" },
@@ -12,6 +14,27 @@ const themeOptions = [
 const FORMAT_HINT = "支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持内嵌或同名 .lrc · 封面自动识别";
 const TMC_HINT =
   "TMC 音乐包为标准 7z 压缩包:内含音频、同名 .lrc 歌词、cover.jpg/png 封面与 meta.json 元数据。把 .tmc 拖进窗口即可导入;在歌曲列表悬停某行可一键导出 TMC。";
+const ASSOC_HINT =
+  "勾选后在资源管理器右键\"打开方式\"中可选 TauriMusic,双击 TMC 包直接导入。安装包版本已默认关联 .tmc;要设为默认打开程序,请在文件的\"打开方式 → 选择其他应用\"中勾选\"始终\"。";
+
+const assocs = ref<AssocState[]>([]);
+
+onMounted(async () => {
+  try {
+    assocs.value = await api.getAssociations();
+  } catch (err) {
+    console.error("读取格式关联失败", err);
+  }
+});
+
+async function toggleAssoc(a: AssocState): Promise<void> {
+  try {
+    await api.setAssociation(a.ext, !a.registered);
+    a.registered = !a.registered;
+  } catch (err) {
+    console.error("修改格式关联失败", err);
+  }
+}
 </script>
 
 <template>
@@ -73,6 +96,17 @@ const TMC_HINT =
           {{ lib.scanning ? `扫描中 ${lib.scanCurrent}/${lib.scanTotal}` : "重新扫描" }}
         </button>
       </div>
+    </div>
+
+    <div class="sec">格式关联</div>
+    <div class="group">
+      <button v-for="a in assocs" :key="a.ext" class="opt" @click="toggleAssoc(a)">
+        <span>{{ a.label }} <span class="ext">.{{ a.ext }}</span></span>
+        <svg v-if="a.registered" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 12.5 4.5 4.5L19 8" />
+        </svg>
+      </button>
+      <p class="hint">{{ ASSOC_HINT }}</p>
     </div>
   </Modal>
 </template>
@@ -196,5 +230,9 @@ const TMC_HINT =
   color: var(--text-2);
   padding: 2px 12px 10px;
   line-height: 1.6;
+}
+.ext {
+  color: var(--text-3);
+  font-size: 11.5px;
 }
 </style>

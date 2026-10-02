@@ -33,6 +33,15 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      { "name": "TauriMusic TMC 音乐包", "ext": ["tmc"], "description": "TMC 音乐包(标准 7z:音频+歌词+封面+元数据)" },
+      { "name": "TauriMusic MP3", "ext": ["mp3"], "mimeType": "audio/mpeg", "description": "MP3 音频" },
+      { "name": "TauriMusic FLAC", "ext": ["flac"], "mimeType": "audio/flac", "description": "FLAC 音频" },
+      { "name": "TauriMusic M4A", "ext": ["m4a"], "mimeType": "audio/mp4", "description": "M4A 音频" },
+      { "name": "TauriMusic WAV", "ext": ["wav"], "mimeType": "audio/wav", "description": "WAV 音频" },
+      { "name": "TauriMusic OGG", "ext": ["ogg"], "mimeType": "audio/ogg", "description": "OGG 音频" },
+      { "name": "TauriMusic OPUS", "ext": ["opus"], "mimeType": "audio/ogg", "description": "OPUS 音频" }
+    ],
     "windows": {
       "nsis": {
         "languages": ["SimpChinese"],

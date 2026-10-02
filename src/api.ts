@@ -56,6 +56,12 @@ export interface NeteaseReport {
   skipped: number;
 }
 
+export interface AssocState {
+  ext: string;
+  label: string;
+  registered: boolean;
+}
+
 export const api = {
   getLibrary: () => invoke<Library>("get_library"),
   pickFolder: () => invoke<string | null>("pick_music_folder"),
@@ -71,4 +77,6 @@ export const api = {
   pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
   pickTmcDest: (defaultName: string) => invoke<string | null>("pick_tmc_dest", { defaultName }),
   neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
+  getAssociations: () => invoke<AssocState[]>("get_associations"),
+  setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),
 };

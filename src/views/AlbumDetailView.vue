@@ -23,7 +23,7 @@ const meta = computed(() =>
 
 function shuffleAll(): void {
   if (!album.value) return;
-  player.shuffle = true;
+  player.mode = "shuffle";
   playTracks(album.value.tracks, Math.floor(Math.random() * album.value.tracks.length));
 }
 

@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, State, WindowEvent,
+    Emitter, Manager, State, WindowEvent,
 };
 
 fn show_main(app: &tauri::AppHandle) {
@@ -159,11 +159,14 @@ fn sanitize_name(s: &str) -> String {
 /// 解包 .tmc 到导入目录下的同名子目录,由扫描器拾取(meta.json 会补齐缺失标签)
 #[tauri::command]
 fn import_tmc(path: String, state: State<AppState>) -> Result<String, String> {
-    let src = PathBuf::from(&path);
+    import_tmc_file(Path::new(&path), &state)
+}
+
+fn import_tmc_file(src: &Path, state: &AppState) -> Result<String, String> {
     if !src.is_file() {
         return Err("文件不存在".into());
     }
-    let import_dir = ensure_import_dir(&state)?;
+    let import_dir = ensure_import_dir(state)?;
     let stem = src
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -173,8 +176,44 @@ fn import_tmc(path: String, state: State<AppState>) -> Result<String, String> {
         fs::remove_dir_all(&dest).map_err(|e| format!("清理旧目录失败: {e}"))?;
     }
     fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
-    sevenz_rust::decompress_file(&src, &dest).map_err(|e| format!("解包失败: {e}"))?;
+    sevenz_rust::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+/// 处理"打开方式"/命令行传入的文件:.tmc 解包导入,音频复制进导入目录,完成后重扫
+fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
+    let paths: Vec<PathBuf> = args
+        .iter()
+        .skip(1)
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let import_dir = match ensure_import_dir(&state) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        for p in &paths {
+            let ext = p
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase().to_string())
+                .unwrap_or_default();
+            let _ = if ext == "tmc" {
+                import_tmc_file(p, &state)
+            } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
+                copy_into_import_dir(p, &import_dir).map(|_| String::new())
+            } else {
+                Ok(String::new())
+            };
+        }
+        let _ = scanner::run_scan(&app);
+        let _ = app.emit("library-changed", ());
+    });
 }
 
 /// 把曲库中的一首歌打包导出为 .tmc
@@ -480,6 +519,123 @@ pub fn netease_lyric(client: &reqwest::blocking::Client, title: &str, artist: &s
     (!text.is_empty()).then_some(text)
 }
 
+// ===== 格式关联(HKCU 注册到"打开方式",无需管理员) =====
+
+pub const ASSOC_EXTS: &[(&str, &str)] = &[
+    ("tmc", "TMC 音乐包"),
+    ("mp3", "MP3 音频"),
+    ("flac", "FLAC 音频"),
+    ("m4a", "M4A 音频"),
+    ("wav", "WAV 音频"),
+    ("ogg", "OGG 音频"),
+    ("opus", "OPUS 音频"),
+];
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssocState {
+    ext: String,
+    label: String,
+    registered: bool,
+}
+
+fn assoc_desc(ext: &str) -> &'static str {
+    ASSOC_EXTS
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, d)| *d)
+        .unwrap_or("音频")
+}
+
+#[tauri::command]
+fn get_associations() -> Vec<AssocState> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        ASSOC_EXTS
+            .iter()
+            .map(|(ext, label)| {
+                let registered = hkcu
+                    .open_subkey(format!(r"Software\Classes\.{ext}\OpenWithProgids"))
+                    .ok()
+                    .map(|k| k.get_value::<String, _>(format!("TauriMusic.{ext}")).is_ok())
+                    .unwrap_or(false);
+                AssocState {
+                    ext: ext.to_string(),
+                    label: label.to_string(),
+                    registered,
+                }
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        ASSOC_EXTS
+            .iter()
+            .map(|(ext, label)| AssocState {
+                ext: ext.to_string(),
+                label: label.to_string(),
+                registered: false,
+            })
+            .collect()
+    }
+}
+
+#[tauri::command]
+fn set_association(ext: String, enable: bool) -> Result<(), String> {
+    let desc = assoc_desc(&ext);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let progid = format!("TauriMusic.{ext}");
+        if enable {
+            let cmd_key = hkcu
+                .create_subkey(format!(r"Software\Classes\{progid}\shell\open\command"))
+                .map_err(|e| e.to_string())?
+                .0;
+            cmd_key
+                .set_value("", &format!("\"{}\" \"%1\"", exe.display()))
+                .map_err(|e| e.to_string())?;
+            let icon_key = hkcu
+                .create_subkey(format!(r"Software\Classes\{progid}\DefaultIcon"))
+                .map_err(|e| e.to_string())?
+                .0;
+            icon_key
+                .set_value("", &format!("{},0", exe.display()))
+                .map_err(|e| e.to_string())?;
+            let id_key = hkcu
+                .create_subkey(format!(r"Software\Classes\{progid}"))
+                .map_err(|e| e.to_string())?
+                .0;
+            id_key.set_value("", &format!("TauriMusic {desc}"))
+                .map_err(|e| e.to_string())?;
+            let ext_key = hkcu
+                .create_subkey(format!(r"Software\Classes\.{ext}\OpenWithProgids"))
+                .map_err(|e| e.to_string())?
+                .0;
+            ext_key.set_value(&progid, &String::new())
+                .map_err(|e| e.to_string())?;
+        } else {
+            if let Ok(k) = hkcu.open_subkey_with_flags(format!(r"Software\Classes\.{ext}\OpenWithProgids"), KEY_WRITE) {
+                let _ = k.delete_value(&progid);
+            }
+            let _ = hkcu.delete_subkey_all(format!(r"Software\Classes\{progid}"));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (desc, exe);
+        Err("仅支持 Windows".into())
+    }
+}
+
 #[tauri::command]
 fn get_library(state: State<AppState>) -> Library {
     state.lib.lock().map(|l| l.clone()).unwrap_or_default()
@@ -534,9 +690,10 @@ fn get_lyrics(id: String, state: State<AppState>) -> Option<lyrics::LyricsPayloa
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // 二次启动时唤起已有窗口(托盘常驻必需)
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        // 二次启动时唤起已有窗口,并把传入的文件交给运行中的实例导入
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             show_main(app);
+            handle_open_paths(app, &args);
         }))
         // 点 × 隐藏到托盘常驻,托盘菜单"退出"才真正退出
         .on_window_event(|window, event| {
@@ -565,6 +722,9 @@ pub fn run() {
             });
             // 首次启动即建好导入目录并登记为扫描来源
             ensure_import_dir(&app.state::<AppState>()).ok();
+            // 命令行/双击"打开方式"传入的文件
+            let cli_args: Vec<String> = std::env::args().collect();
+            handle_open_paths(handle, &cli_args);
 
             // 托盘常驻:左键切换显示/隐藏,右键菜单可显示或退出
             let show = MenuItem::with_id(app, "show", "显示 TauriMusic", true, None::<&str>)?;
@@ -607,7 +767,9 @@ pub fn run() {
             export_tmc,
             pick_tmc_file,
             pick_tmc_dest,
-            netease_enrich_album
+            netease_enrich_album,
+            get_associations,
+            set_association
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
