@@ -139,6 +139,23 @@ export async function exportTrackTmc(id: string, title: string, artist: string):
   }
 }
 
+/** 通过网易云公开接口为整张专辑在线补全封面与歌词(仅元数据,播放仍走本地文件) */
+export async function enrichAlbumNetease(key: string): Promise<void> {
+  flashStatus("正在在线匹配封面与歌词…");
+  try {
+    const r = await api.neteaseEnrichAlbum(key);
+    const parts: string[] = [];
+    if (r.cover) parts.push("封面已更新");
+    if (r.lyrics) parts.push(`补全 ${r.lyrics} 首歌词`);
+    if (!parts.length) parts.push(r.skipped ? "没有找到可匹配的内容" : "元数据已是最新");
+    flashStatus(parts.join(" · "));
+  } catch (err) {
+    console.error("在线匹配失败", err);
+    flashStatus("在线匹配失败");
+  }
+  await rescan();
+}
+
 export async function openImportDir(): Promise<void> {
   try {
     lib.importDir = await api.openImportDir();

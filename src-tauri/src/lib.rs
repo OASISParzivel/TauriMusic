@@ -278,6 +278,172 @@ async fn pick_tmc_dest(default_name: String) -> Option<String> {
         .map(|f| f.path().to_string_lossy().to_string())
 }
 
+// ===== 在线元数据补全(网易云公开接口,仅补封面/歌词,不涉及流媒体) =====
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NeteaseReport {
+    cover: bool,
+    lyrics: u32,
+    skipped: u32,
+}
+
+/// 为整张专辑在线匹配封面与歌词:封面存为曲目目录 cover.jpg,歌词存为同名 .lrc
+#[tauri::command]
+async fn netease_enrich_album(
+    album_key: String,
+    app: tauri::AppHandle,
+) -> Result<NeteaseReport, String> {
+    tauri::async_runtime::spawn_blocking(move || netease_enrich_blocking(&album_key, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<NeteaseReport, String> {
+    let state = app.state::<AppState>();
+    let tracks: Vec<model::Track> = {
+        let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        lib.tracks
+            .iter()
+            .filter(|t| format!("{}\u{1}{}", t.album_artist, t.album) == album_key)
+            .cloned()
+            .collect()
+    };
+    if tracks.is_empty() {
+        return Err("未找到该专辑的曲目".into());
+    }
+
+    let client = netease_client();
+
+    let mut report = NeteaseReport { cover: false, lyrics: 0, skipped: 0 };
+
+    // 封面:存在无封面曲目时才匹配(先按专辑名搜专辑图,再回退按歌名搜歌曲所属专辑图)
+    if tracks.iter().any(|t| t.cover.is_none()) {
+        let first = &tracks[0];
+        match netease_album_cover(&client, &first.album, &first.title) {
+            Some(pic_url) => match client.get(&pic_url).send() {
+                Ok(resp) if resp.status().is_success() => match resp.bytes() {
+                    Ok(bytes) => {
+                        let mut dirs: Vec<PathBuf> = tracks
+                            .iter()
+                            .filter(|t| t.cover.is_none())
+                            .filter_map(|t| Path::new(&t.path).parent().map(|p| p.to_path_buf()))
+                            .collect();
+                        dirs.sort();
+                        dirs.dedup();
+                        for d in dirs {
+                            let _ = fs::write(d.join("cover.jpg"), &bytes);
+                        }
+                        report.cover = true;
+                    }
+                    Err(_) => report.skipped += 1,
+                },
+                _ => report.skipped += 1,
+            },
+            None => report.skipped += 1,
+        }
+    }
+
+    // 歌词:逐首匹配无 .lrc 的曲目
+    for t in tracks.iter().filter(|t| t.lrc_path.is_none()) {
+        match netease_lyric(&client, &t.title, &t.artist) {
+            Some(text) => {
+                let parent = Path::new(&t.path).parent().unwrap_or_else(|| Path::new("."));
+                let stem = Path::new(&t.path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "track".into());
+                let dest = parent.join(format!("{stem}.lrc"));
+                if fs::write(&dest, text).is_ok() {
+                    report.lyrics += 1;
+                } else {
+                    report.skipped += 1;
+                }
+            }
+            None => report.skipped += 1,
+        }
+    }
+    Ok(report)
+}
+
+pub fn netease_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("网络客户端初始化失败")
+}
+
+fn netease_search(client: &reqwest::blocking::Client, keyword: &str, search_type: u32, limit: u32) -> Option<serde_json::Value> {
+    let resp = client
+        .post("https://music.163.com/api/search/get/web")
+        .header("Referer", "https://music.163.com")
+        .header("Cookie", "os=pc; appver=2.9.7")
+        .form(&[
+            ("s", keyword),
+            ("type", &search_type.to_string()),
+            ("limit", &limit.to_string()),
+        ])
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<serde_json::Value>().ok()
+}
+
+/// 专辑封面:先按专辑名搜专辑,搜不到再按歌名搜歌曲取其所属专辑图
+pub fn netease_album_cover(client: &reqwest::blocking::Client, album: &str, fallback_title: &str) -> Option<String> {
+    if let Some(v) = netease_search(client, album, 10, 5) {
+        if let Some(url) = v.pointer("/result/albums/0/picUrl").and_then(|x| x.as_str()) {
+            return Some(url.replace("http://", "https://"));
+        }
+    }
+    let v = netease_search(client, fallback_title, 1, 5)?;
+    v.pointer("/result/songs/0/album/picUrl")
+        .and_then(|x| x.as_str())
+        .map(|s| s.replace("http://", "https://"))
+}
+
+/// 歌词:按歌名搜索,优先选艺人名能对上的结果
+pub fn netease_lyric(client: &reqwest::blocking::Client, title: &str, artist: &str) -> Option<String> {
+    let v = netease_search(client, title, 1, 5)?;
+    let songs = v.pointer("/result/songs")?.as_array()?;
+    let segments: Vec<&str> = artist.split(['/','&',',','、']).map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let pick = songs
+        .iter()
+        .find(|s| {
+            s["artists"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter().any(|a| {
+                        a["name"]
+                            .as_str()
+                            .map(|n| segments.iter().any(|seg| n.contains(seg) || seg.contains(n)))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        })
+        .or_else(|| songs.first())?;
+    let id = pick["id"].as_i64()?;
+    let url = format!("https://music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=-1");
+    let resp = client
+        .get(&url)
+        .header("Referer", "https://music.163.com")
+        .header("Cookie", "os=pc; appver=2.9.7")
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v = resp.json::<serde_json::Value>().ok()?;
+    let text = v.pointer("/lrc/lyric")?.as_str()?.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 #[tauri::command]
 fn get_library(state: State<AppState>) -> Library {
     state.lib.lock().map(|l| l.clone()).unwrap_or_default()
@@ -367,7 +533,8 @@ pub fn run() {
             import_tmc,
             export_tmc,
             pick_tmc_file,
-            pick_tmc_dest
+            pick_tmc_dest,
+            netease_enrich_album
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

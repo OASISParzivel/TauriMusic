@@ -33,6 +33,21 @@ fn main() {
         println!("已解包 {} -> {}", src.display(), dest.display());
         return;
     }
+    // 调试用:make_tmc netease <标题> <艺人> 验证在线匹配算法
+    if args.get(1).map(|s| s == "netease").unwrap_or(false) {
+        let title = args.get(2).map(|s| s.as_str()).unwrap_or("");
+        let artist = args.get(3).map(|s| s.as_str()).unwrap_or("");
+        let client = tauri_music_lib::netease_client();
+        println!(
+            "封面: {:?}",
+            tauri_music_lib::netease_album_cover(&client, title, title).map(|u| u[..60].to_string())
+        );
+        match tauri_music_lib::netease_lyric(&client, title, artist) {
+            Some(l) => println!("歌词(前120字): {}", l.chars().take(120).collect::<String>()),
+            None => println!("歌词: 未找到"),
+        }
+        return;
+    }
 
     let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../demo");
     std::fs::create_dir_all(&out_dir).expect("创建 demo 目录失败");

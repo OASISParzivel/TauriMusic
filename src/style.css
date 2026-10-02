@@ -296,22 +296,25 @@ html.dark.glass {
   --bar-bg: rgba(24, 24, 32, 0.55);
 }
 
-/* 悬浮玻璃卡片:顶栏 + 侧栏 + (玻璃模式下内容直接呼吸在氛围背景上) */
+/* 停靠式玻璃面板:贴合窗口边缘(窗口圆角交给系统),内角全部圆角 */
 html.glass .shell {
   position: relative;
   z-index: 1;
-  padding: 10px;
+  padding: 0;
   gap: 10px;
 }
 html.glass .topbar {
   grid-column: 1 / 3;
   height: auto;
+  border-radius: 0 0 20px 0;
+}
+html.glass .sidebar {
+  border-radius: 0 20px 20px 0;
 }
 html.glass .sidebar,
 html.glass .topbar {
   position: relative;
   isolation: isolate;
-  border-radius: 20px;
   border: 1px solid transparent;
   /* 玻璃本体:padding-box 是半透托底,border-box 是绕边缘一圈的镜面高光 */
   background:

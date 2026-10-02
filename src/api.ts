@@ -50,6 +50,12 @@ export interface ImportReport {
   skipped: number;
 }
 
+export interface NeteaseReport {
+  cover: boolean;
+  lyrics: number;
+  skipped: number;
+}
+
 export const api = {
   getLibrary: () => invoke<Library>("get_library"),
   pickFolder: () => invoke<string | null>("pick_music_folder"),
@@ -64,4 +70,5 @@ export const api = {
   exportTmc: (id: string, dest: string) => invoke<string>("export_tmc", { id, dest }),
   pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
   pickTmcDest: (defaultName: string) => invoke<string | null>("pick_tmc_dest", { defaultName }),
+  neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
 };

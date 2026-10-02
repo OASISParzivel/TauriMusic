@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { albumByKey } from "../stores/library";
+import { albumByKey, enrichAlbumNetease } from "../stores/library";
 import { playTracks, player } from "../stores/player";
 import { ui, go } from "../stores/ui";
 import TrackList from "../components/TrackList.vue";
@@ -26,6 +26,13 @@ function shuffleAll(): void {
   player.shuffle = true;
   playTracks(album.value.tracks, Math.floor(Math.random() * album.value.tracks.length));
 }
+
+const enriching = ref(false);
+function onEnrich(): void {
+  if (!album.value || enriching.value) return;
+  enriching.value = true;
+  void enrichAlbumNetease(album.value.key).finally(() => (enriching.value = false));
+}
 </script>
 
 <template>
@@ -43,6 +50,14 @@ function shuffleAll(): void {
         <div class="btns">
           <button class="primary-pill" @click="playTracks(album.tracks, 0)">播放</button>
           <button class="ghost-pill" @click="shuffleAll">随机播放</button>
+          <button
+            class="ghost-pill"
+            title="通过网易云公开接口补全封面与歌词(仅元数据,不影响本地文件播放)"
+            :disabled="enriching"
+            @click="onEnrich"
+          >
+            {{ enriching ? "匹配中…" : "在线匹配" }}
+          </button>
         </div>
       </div>
     </header>
