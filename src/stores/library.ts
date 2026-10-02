@@ -2,6 +2,7 @@ import { computed, reactive } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, type Track } from "../api";
+import { releaseIfDeleted } from "./player";
 
 export interface Album {
   /** albumArtist + album 组成的唯一键 */
@@ -165,6 +166,26 @@ export async function enrichAlbumNetease(key: string): Promise<void> {
     flashStatus("在线匹配失败");
   }
   await rescan();
+}
+
+/** 删除曲目:音频与歌词移入回收站,曲库同步移除;删除当前播放曲时清空播放器 */
+export async function deleteTracks(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    const n = await api.deleteTracks(ids);
+    releaseIfDeleted(ids);
+    flashStatus(n > 0 ? `已删除 ${n} 首(移入回收站)` : "删除失败");
+  } catch (err) {
+    console.error("删除失败", err);
+    flashStatus("删除失败");
+  }
+  try {
+    const data = await api.getLibrary();
+    lib.tracks = data.tracks;
+    lib.folders = data.folders;
+  } catch (err) {
+    console.error("刷新曲库失败", err);
+  }
 }
 
 export async function openImportDir(): Promise<void> {

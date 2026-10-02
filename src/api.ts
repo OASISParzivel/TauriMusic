@@ -79,4 +79,5 @@ export const api = {
   neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
   getAssociations: () => invoke<AssocState[]>("get_associations"),
   setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),
+  deleteTracks: (ids: string[]) => invoke<number>("delete_tracks", { ids }),
 };

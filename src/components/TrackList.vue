@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
 import { current, fmtTime, playTrack } from "../stores/player";
-import { exportTrackTmc } from "../stores/library";
+import { exportTrackTmc, deleteTracks } from "../stores/library";
 
 const props = defineProps<{
   tracks: Track[];
@@ -20,6 +21,21 @@ function play(t: Track): void {
 
 function exportOne(t: Track): void {
   void exportTrackTmc(t.id, t.title, t.artist);
+}
+
+/** 删除采用两段确认:第一次点进入确认态,3 秒内再点执行 */
+const confirmingId = ref<string | null>(null);
+let confirmTimer = 0;
+
+function onDelete(t: Track): void {
+  if (confirmingId.value !== t.id) {
+    confirmingId.value = t.id;
+    window.clearTimeout(confirmTimer);
+    confirmTimer = window.setTimeout(() => (confirmingId.value = null), 3000);
+    return;
+  }
+  confirmingId.value = null;
+  void deleteTracks([t.id]);
 }
 </script>
 
@@ -51,6 +67,17 @@ function exportOne(t: Track): void {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 13.5V4M8.5 7.5 12 4l3.5 3.5" />
           <path d="M5 15v2.6c0 .77.63 1.4 1.4 1.4h11.2c.77 0 1.4-.63 1.4-1.4V15" />
+        </svg>
+      </button>
+      <button
+        class="del"
+        :class="{ confirm: confirmingId === t.id }"
+        :title="confirmingId === t.id ? '再次点击确认删除(移入回收站)' : '删除这首歌(移入回收站)'"
+        @click.stop="onDelete(t)"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 7h15M9.5 7V5.2c0-.66.54-1.2 1.2-1.2h2.6c.66 0 1.2.54 1.2 1.2V7M6.5 7l.8 11.3c.06.77.7 1.2 1.4 1.2h6.6c.7 0 1.34-.43 1.4-1.2L17.5 7" />
+          <path d="M10 11v5M14 11v5" />
         </svg>
       </button>
       <span class="dur">{{ fmtTime(t.duration) }}</span>
@@ -208,6 +235,38 @@ function exportOne(t: Track): void {
 .exp:hover {
   background: var(--hover);
   color: var(--text);
+}
+.del {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+.del svg {
+  width: 15px;
+  height: 15px;
+}
+.row:hover .del {
+  opacity: 1;
+}
+.del:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.del.confirm {
+  opacity: 1;
+  background: rgba(232, 17, 35, 0.12);
+  color: #e81123;
+}
+.del.confirm:hover {
+  background: rgba(232, 17, 35, 0.2);
+  color: #e81123;
 }
 
 .dur {

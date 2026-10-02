@@ -194,3 +194,18 @@ export function fmtTime(s: number): string {
   const sec = Math.floor(s % 60);
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
+
+/** 删除的曲目若是当前播放,清空播放器避免文件句柄占用 */
+export function releaseIfDeleted(ids: string[]): void {
+  if (current.value && ids.includes(current.value.id)) {
+    const a = ensureAudio();
+    a.pause();
+    a.removeAttribute("src");
+    a.load();
+    player.queue = [];
+    player.index = -1;
+    player.playing = false;
+    player.position = 0;
+    player.duration = 0;
+  }
+}

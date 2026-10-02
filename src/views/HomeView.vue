@@ -61,7 +61,7 @@ function shortPath(p: string): string {
             <path d="M3.5 7c0-1.1.9-2 2-2h3.4l2 2.2h7.6c1.1 0 2 .9 2 2v8.3c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2z" />
           </svg>
           {{ shortPath(f) }}
-          <button class="x" title="移除该文件夹" @click="removeFolder(f)">×</button>
+          <button v-if="f !== lib.importDir" class="x" title="移除该文件夹" @click="removeFolder(f)">×</button>
         </span>
       </div>
 

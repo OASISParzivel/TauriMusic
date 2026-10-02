@@ -521,6 +521,64 @@ pub fn netease_lyric(client: &reqwest::blocking::Client, title: &str, artist: &s
 
 // ===== 格式关联(HKCU 注册到"打开方式",无需管理员) =====
 
+/// 删除曲目:音频与同名歌词移入回收站,曲库同步移除;
+/// 导入目录内的子目录若已无音频文件则一并清理
+#[tauri::command]
+fn delete_tracks(ids: Vec<String>, state: State<AppState>) -> Result<u32, String> {
+    let import_dir = state.data_dir.join("Music");
+    let mut deleted = 0u32;
+    let mut parents: Vec<PathBuf> = Vec::new();
+    {
+        let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        let mut kept: Vec<model::Track> = Vec::with_capacity(lib.tracks.len());
+        for t in lib.tracks.drain(..) {
+            if ids.contains(&t.id) {
+                let p = Path::new(&t.path);
+                if trash::delete(p).is_ok() {
+                    deleted += 1;
+                }
+                if let Some(parent) = p.parent() {
+                    if let Some(stem) = p.file_stem() {
+                        let _ = trash::delete(parent.join(format!("{}.lrc", stem.to_string_lossy())));
+                    }
+                    let parent = parent.to_path_buf();
+                    if !parents.contains(&parent) {
+                        parents.push(parent);
+                    }
+                }
+            } else {
+                kept.push(t);
+            }
+        }
+        lib.tracks = kept;
+        lib.save(&state.data_dir.join(LIBRARY_FILE))
+            .map_err(|e| e.to_string())?;
+    }
+    // 导入目录的子目录(非根)如果没有音频文件了,连同残留的 meta/封面一起清掉
+    for d in parents {
+        if d.starts_with(&import_dir) && d != import_dir {
+            let has_audio = std::fs::read_dir(&d)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .any(|e| {
+                            e.path()
+                                .extension()
+                                .map(|x| {
+                                    let x = x.to_string_lossy().to_lowercase();
+                                    scanner::EXTENSIONS.contains(&x.as_str())
+                                })
+                                .unwrap_or(false)
+                        })
+                })
+                .unwrap_or(false);
+            if !has_audio {
+                let _ = fs::remove_dir_all(&d);
+            }
+        }
+    }
+    Ok(deleted)
+}
+
 pub const ASSOC_EXTS: &[(&str, &str)] = &[
     ("tmc", "TMC 音乐包"),
     ("mp3", "MP3 音频"),
@@ -769,7 +827,8 @@ pub fn run() {
             pick_tmc_dest,
             netease_enrich_album,
             get_associations,
-            set_association
+            set_association,
+            delete_tracks
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { albumByKey, enrichAlbumNetease } from "../stores/library";
+import { albumByKey, enrichAlbumNetease, deleteTracks } from "../stores/library";
 import { playTracks, player } from "../stores/player";
 import { ui, go } from "../stores/ui";
 import TrackList from "../components/TrackList.vue";
@@ -33,6 +33,22 @@ function onEnrich(): void {
   enriching.value = true;
   void enrichAlbumNetease(album.value.key).finally(() => (enriching.value = false));
 }
+
+/** 删除整张专辑(两段确认,确认后回到专辑列表) */
+const confirmingDelete = ref(false);
+let confirmTimer = 0;
+function onDeleteAlbum(): void {
+  if (!album.value) return;
+  if (!confirmingDelete.value) {
+    confirmingDelete.value = true;
+    window.clearTimeout(confirmTimer);
+    confirmTimer = window.setTimeout(() => (confirmingDelete.value = false), 3000);
+    return;
+  }
+  confirmingDelete.value = false;
+  const ids = album.value.tracks.map((t) => t.id);
+  void deleteTracks(ids).then(() => go("albums"));
+}
 </script>
 
 <template>
@@ -57,6 +73,14 @@ function onEnrich(): void {
             @click="onEnrich"
           >
             {{ enriching ? "匹配中…" : "在线匹配" }}
+          </button>
+          <button
+            class="ghost-pill danger"
+            :class="{ confirm: confirmingDelete }"
+            :title="confirmingDelete ? '再次点击确认删除整张专辑(音频移入回收站)' : '删除这张专辑(音频移入回收站)'"
+            @click="onDeleteAlbum"
+          >
+            {{ confirmingDelete ? "确认删除?" : "删除专辑" }}
           </button>
         </div>
       </div>
@@ -151,5 +175,9 @@ h1 {
 }
 .ghost-pill:hover {
   filter: brightness(1.06);
+}
+.ghost-pill.danger.confirm {
+  color: #e81123;
+  border: 1px solid #e81123;
 }
 </style>
