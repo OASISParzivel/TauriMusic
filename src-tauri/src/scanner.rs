@@ -388,8 +388,8 @@ fn peek_artist_album(path: &Path) -> Option<(String, String)> {
     };
     let artist = get(&ItemKey::AlbumArtist).or_else(|| get(&ItemKey::TrackArtist));
     let album = get(&ItemKey::AlbumTitle);
-    if artist.is_some() && album.is_some() {
-        return Some((artist.unwrap(), album.unwrap()));
+    if let (Some(a), Some(alb)) = (artist.as_ref(), album.as_ref()) {
+        return Some((a.clone(), alb.clone()));
     }
     // 标签不全:文件名「艺人 - 标题」补艺人
     let stem = path.file_stem()?.to_string_lossy().to_string();
@@ -625,7 +625,7 @@ mod tests {
         fs::create_dir_all(&target_dir1).unwrap();
         write_wav(&target_dir1.join("周杰伦 - 晴天.wav"));
         let dup = dir1.join("周杰伦 - 晴天.wav");
-        fs::write(&dup, fs::read(target_dir1.join("周杰伦 - 晴天.wav")).unwrap());
+        fs::write(&dup, fs::read(target_dir1.join("周杰伦 - 晴天.wav")).unwrap()).unwrap();
         let mut files = vec![dup.clone()];
         organize_top_level(&dir1, &mut files);
         assert!(!dup.exists(), "同内容同名副本应被清理");
@@ -638,7 +638,7 @@ mod tests {
         let mut wav_bytes = fs::read(target_dir2.join("周杰伦 - 晴天.wav")).unwrap();
         wav_bytes.push(0);
         let conflict = dir2.join("周杰伦 - 晴天.wav");
-        fs::write(&conflict, &wav_bytes);
+        fs::write(&conflict, &wav_bytes).unwrap();
         let mut files = vec![conflict.clone()];
         organize_top_level(&dir2, &mut files);
         assert!(conflict.is_file(), "不同内容的同名文件应保持原位");
