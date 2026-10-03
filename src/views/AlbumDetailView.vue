@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { albumByKey, enrichAlbumNetease, deleteTracks } from "../stores/library";
+import { albumByKey, enrichAlbumNetease, deleteTracks, exportTracksTmc } from "../stores/library";
 import { playTracks, player } from "../stores/player";
 import { ui, go } from "../stores/ui";
 import TrackList from "../components/TrackList.vue";
@@ -32,6 +32,16 @@ function onEnrich(): void {
   if (!album.value || enriching.value) return;
   enriching.value = true;
   void enrichAlbumNetease(album.value.key).finally(() => (enriching.value = false));
+}
+
+/** 整张专辑导出为 TMC 音乐包(每首一个,存到所选文件夹) */
+function onExportAlbum(): void {
+  if (!album.value) return;
+  void exportTracksTmc(
+    album.value.tracks.map((t) => t.id),
+    album.value.tracks,
+    "整张专辑",
+  );
 }
 
 /** 删除整张专辑(两段确认,确认后回到专辑列表) */
@@ -72,6 +82,13 @@ function onDeleteAlbum(): void {
         <div class="btns">
           <button class="primary-pill" @click="playTracks(album.tracks, 0)">播放</button>
           <button class="ghost-pill" @click="shuffleAll">随机播放</button>
+          <button
+            class="ghost-pill"
+            title="每首歌打包成一个 TMC 音乐包,存到所选文件夹"
+            @click="onExportAlbum"
+          >
+            导出专辑
+          </button>
           <button
             class="ghost-pill"
             title="通过网易云公开接口补全封面与歌词(仅元数据,不影响本地文件播放)"

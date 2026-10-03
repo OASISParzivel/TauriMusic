@@ -2,7 +2,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Album } from "../stores/library";
 import { playTracks } from "../stores/player";
-import { deleteTracks } from "../stores/library";
+import { deleteTracks, exportTracksTmc } from "../stores/library";
 import { openCtx } from "../stores/context";
 
 defineProps<{ album: Album }>();
@@ -13,6 +13,16 @@ function albumMenu(e: MouseEvent, album: Album): void {
   openCtx(e, [
     { label: "播放专辑", icon: "play", action: () => playTracks(album.tracks, 0) },
     { label: "打开专辑", icon: "album", action: () => emit("open") },
+    {
+      label: "导出专辑为 TMC 音乐包",
+      icon: "export",
+      action: () =>
+        void exportTracksTmc(
+          album.tracks.map((t) => t.id),
+          album.tracks,
+          "整张专辑",
+        ),
+    },
     {
       label: "删除(移入回收站)",
       icon: "delete",

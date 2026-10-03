@@ -454,9 +454,9 @@ html.dark.glass .nav-item.active {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
-/* 艺人页吸顶表头在玻璃下需要自己的磨砂底 */
+/* 艺人页吸顶表头在玻璃下需要自己的磨砂底(透明度足够高,滚动内容不再透色) */
 html.glass .detail .view-head {
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(30px) saturate(1.7);
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.6);
@@ -465,7 +465,7 @@ html.glass .detail .view-head {
 }
 
 html.dark.glass .detail .view-head {
-  background: rgba(24, 24, 32, 0.5);
+  background: rgba(24, 24, 32, 0.72);
   border-color: rgba(255, 255, 255, 0.1);
 }
 

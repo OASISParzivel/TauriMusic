@@ -350,12 +350,37 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
     .map_err(|e| e.to_string())?;
 
     let mut dest_path = PathBuf::from(dest);
+    // 文件名清洗:标签可能含 \ / 等文件系统非法字符
+    if let Some(parent) = dest_path.parent() {
+        let stem = dest_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        dest_path = parent.join(sanitize_name(&stem));
+    }
     if dest_path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase() != "tmc")
         .unwrap_or(true)
     {
         dest_path.set_extension("tmc");
+    }
+    // 批量导出时同名(同标题)曲目自动加序号,避免相互覆盖
+    if dest_path.exists() {
+        let parent = dest_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let stem = dest_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "track".into());
+        let mut i = 2;
+        loop {
+            let candidate = parent.join(format!("{stem} ({i}).tmc"));
+            if !candidate.exists() {
+                dest_path = candidate;
+                break;
+            }
+            i += 1;
+        }
     }
     if let Some(parent) = dest_path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -449,6 +474,16 @@ async fn pick_audio_files() -> Option<Vec<String>> {
                 .map(|f| f.path().to_string_lossy().to_string())
                 .collect()
         })
+}
+
+/// 批量导出的目标文件夹
+#[tauri::command]
+async fn pick_export_dir() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("选择导出位置")
+        .pick_folder()
+        .await
+        .map(|f| f.path().to_string_lossy().to_string())
 }
 
 // ===== 在线元数据补全(网易云公开接口,仅补封面/歌词,不涉及流媒体) =====
@@ -1115,6 +1150,7 @@ pub fn run() {
             pick_tmc_file,
             pick_tmc_dest,
             pick_audio_files,
+            pick_export_dir,
             netease_enrich_album,
             get_associations,
             set_association,
@@ -1209,7 +1245,10 @@ mod tests {
 
     #[test]
     fn sanitize_replaces_invalid_filename_chars() {
-        assert_eq!(sanitize_name("a/b\\c:d*e?f\"g<h>i|j"), "a_b_c_d_e_f_g_h_i_j");
+        assert_eq!(
+            sanitize_name("a/b\\c:d*e?f\"g<h>i|j"),
+            "a_b_c_d_e_f_g_h_i_j"
+        );
         assert_eq!(sanitize_name("海阔天空"), "海阔天空");
         assert_eq!(sanitize_name("  Beyond  "), "Beyond");
         // 结尾的点与空格被 Windows 静默吞掉,一并去掉

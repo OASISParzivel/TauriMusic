@@ -251,6 +251,34 @@ export async function exportTrackTmc(id: string, title: string, artist: string):
   }
 }
 
+/** 批量导出多首歌为 .tmc 音乐包(多选操作条 / 专辑导出入口) */
+export async function exportTracksTmc(
+  ids: string[],
+  tracks: Track[],
+  label?: string,
+): Promise<void> {
+  if (ids.length === 0) return;
+  const dir = await api.pickExportDir();
+  if (!dir) return;
+  flashStatus(`正在导出 ${ids.length} 个音乐包…`);
+  let ok = 0;
+  for (const t of tracks) {
+    if (!ids.includes(t.id)) continue;
+    try {
+      await api.exportTmc(t.id, `${dir}\\${t.title} - ${t.artist}`);
+      ok++;
+    } catch (err) {
+      console.error("导出 TMC 失败", t.title, err);
+    }
+  }
+  const prefix = label ? `${label} · ` : "";
+  flashStatus(
+    ok === ids.length
+      ? `${prefix}已导出 ${ok} 个音乐包`
+      : `${prefix}已导出 ${ok}/${ids.length} 个(部分失败)`,
+  );
+}
+
 /** 通过网易云公开接口为整张专辑在线补全封面与歌词(仅元数据,播放仍走本地文件) */
 export async function enrichAlbumNetease(key: string): Promise<void> {
   flashStatus("正在在线匹配封面与歌词…");

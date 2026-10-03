@@ -85,6 +85,7 @@ export const api = {
   pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
   pickAudioFiles: () => invoke<string[] | null>("pick_audio_files"),
   pickTmcDest: (defaultName: string) => invoke<string | null>("pick_tmc_dest", { defaultName }),
+  pickExportDir: () => invoke<string | null>("pick_export_dir"),
   neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
   getAssociations: () => invoke<AssocState[]>("get_associations"),
   setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),

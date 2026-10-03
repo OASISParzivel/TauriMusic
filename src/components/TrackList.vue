@@ -2,8 +2,8 @@
 import { ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
-import { current, fmtTime, playTrack } from "../stores/player";
-import { exportTrackTmc, deleteTracks } from "../stores/library";
+import { current, fmtTime, playTracks, playTrack } from "../stores/player";
+import { exportTrackTmc, exportTracksTmc, deleteTracks } from "../stores/library";
 import { openAlbum, openArtist } from "../stores/ui";
 import { openCtx } from "../stores/context";
 
@@ -40,8 +40,93 @@ function onDelete(t: Track): void {
   void deleteTracks([t.id]);
 }
 
-/** 歌曲右键菜单 */
+/** 多选:Ctrl/Shift 点击进入选择;Shift 为范围选 */
+const selected = ref<Set<string>>(new Set());
+let anchorIndex = -1;
+
+function toggleSelect(t: Track, i: number): void {
+  const next = new Set(selected.value);
+  if (next.has(t.id)) next.delete(t.id);
+  else next.add(t.id);
+  selected.value = next;
+  anchorIndex = i;
+}
+
+function rangeSelect(to: number): void {
+  const from = anchorIndex >= 0 ? anchorIndex : 0;
+  const [a, b] = from <= to ? [from, to] : [to, from];
+  const next = new Set<string>();
+  for (let i = a; i <= b; i++) next.add(props.tracks[i]?.id ?? "");
+  next.delete("");
+  selected.value = next;
+}
+
+function rowClick(e: MouseEvent, t: Track, i: number): void {
+  if (e.shiftKey) {
+    rangeSelect(i);
+    return;
+  }
+  if (e.ctrlKey || e.metaKey) {
+    toggleSelect(t, i);
+    return;
+  }
+  if (selected.value.size > 0) {
+    // 已处于选择模式时,普通点击重置为只选这一行
+    selected.value = new Set([t.id]);
+    anchorIndex = i;
+    return;
+  }
+  play(t);
+}
+
+function clearSelection(): void {
+  selected.value = new Set();
+  anchorIndex = -1;
+}
+
+const selectedTracks = () => props.tracks.filter((t) => selected.value.has(t.id));
+
+function playSelected(): void {
+  const list = selectedTracks();
+  if (list.length) playTracks(list, 0);
+  clearSelection();
+}
+
+function exportSelected(): void {
+  void exportTracksTmc([...selected.value], props.tracks);
+  clearSelection();
+}
+
+const confirmingBatchDelete = ref(false);
+let batchConfirmTimer = 0;
+
+function deleteSelected(): void {
+  if (!confirmingBatchDelete.value) {
+    confirmingBatchDelete.value = true;
+    window.clearTimeout(batchConfirmTimer);
+    batchConfirmTimer = window.setTimeout(() => (confirmingBatchDelete.value = false), 3000);
+    return;
+  }
+  confirmingBatchDelete.value = false;
+  void deleteTracks([...selected.value]).then(clearSelection);
+}
+
+/** 歌曲右键菜单:有选中时批量操作,否则单首 */
 function rowMenu(e: MouseEvent, t: Track): void {
+  if (selected.value.has(t.id) && selected.value.size > 1) {
+    const n = selected.value.size;
+    openCtx(e, [
+      { label: `播放选中的 ${n} 首`, icon: "play", action: playSelected },
+      { label: `导出选中为 TMC 音乐包(${n})`, icon: "export", action: exportSelected },
+      {
+        label: `删除选中的 ${n} 首(移入回收站)`,
+        icon: "delete",
+        danger: true,
+        action: deleteSelected,
+      },
+    ]);
+    return;
+  }
   openCtx(e, [
     { label: "播放", icon: "play", action: () => play(t) },
     { label: "查看专辑", icon: "album", action: () => openAlbum(`${t.albumArtist || t.artist}\u{1}${t.album}`) },
@@ -58,8 +143,8 @@ function rowMenu(e: MouseEvent, t: Track): void {
       v-for="(t, i) in tracks"
       :key="t.id + '-' + i"
       class="row"
-      :class="{ current: t.id === current?.id }"
-      @click="play(t)"
+      :class="{ current: t.id === current?.id, picked: selected.has(t.id) }"
+      @click="rowClick($event, t, i)"
       @contextmenu="rowMenu($event, t)"
     >
       <span v-if="showIndex" class="idx">
@@ -96,6 +181,21 @@ function rowMenu(e: MouseEvent, t: Track): void {
       </button>
       <span class="dur">{{ fmtTime(t.duration) }}</span>
     </div>
+
+    <!-- 多选操作条 -->
+    <Transition name="bar">
+      <div v-if="selected.size > 0" class="sel-bar">
+        <span class="sel-count">已选 {{ selected.size }} 首</span>
+        <div class="sel-actions">
+          <button class="sel-btn primary" @click="playSelected">播放</button>
+          <button class="sel-btn" @click="exportSelected">导出 TMC</button>
+          <button class="sel-btn danger" :class="{ confirm: confirmingBatchDelete }" @click="deleteSelected">
+            {{ confirmingBatchDelete ? "确认删除?" : "删除" }}
+          </button>
+          <button class="sel-btn ghost" @click="clearSelection">取消</button>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -293,5 +393,83 @@ function rowMenu(e: MouseEvent, t: Track): void {
   font-size: 12px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+}
+
+/* 多选状态 */
+.row.picked {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.row.picked:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* 多选操作条 */
+.sel-bar {
+  position: sticky;
+  bottom: 12px;
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px 8px 16px;
+  border-radius: 999px;
+  background: var(--pill-bg, rgba(0, 0, 0, 0.06));
+  border: 1px solid var(--hairline);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(24px) saturate(1.6);
+  z-index: 5;
+}
+.sel-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.sel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sel-btn {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border-radius: 999px;
+  padding: 6px 14px;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.3s var(--ease-spring);
+}
+.sel-btn:hover {
+  background: var(--hover);
+}
+.sel-btn:active {
+  transform: scale(0.96);
+  transition-duration: 0.08s;
+}
+.sel-btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+.sel-btn.primary:hover {
+  background: var(--accent-hover);
+}
+.sel-btn.danger.confirm {
+  color: #e81123;
+  border: 1px solid #e81123;
+}
+.sel-btn.ghost {
+  color: var(--text-2);
+}
+
+.bar-enter-active,
+.bar-leave-active {
+  transition: opacity 0.2s ease, transform 0.3s var(--ease-spring);
+}
+.bar-enter-from,
+.bar-leave-to {
+  opacity: 0;
+  transform: translateY(14px);
 }
 </style>
