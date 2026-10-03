@@ -7,7 +7,7 @@ on:
 
 jobs:
   rust:
-    name: Rust (clippy + test)
+    name: Rust (fmt + clippy + test, Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,6 +15,29 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: 版本一致性(package.json / tauri.conf.json / Cargo.toml)
+        run: node scripts/check-version.mjs
+      - name: rustfmt
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: 单元测试
+        working-directory: src-tauri
+        run: cargo test
+
+  rust-windows:
+    name: Rust (clippy + test, Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -29,7 +52,7 @@ jobs:
         run: cargo test
 
   frontend:
-    name: Frontend (type-check + build)
+    name: Frontend (lint + type-check + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,5 +61,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: ESLint
+        run: npm run lint
       - name: 类型检查与构建
         run: npm run build

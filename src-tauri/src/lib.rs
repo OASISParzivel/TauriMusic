@@ -324,7 +324,12 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
         }
         if !failures.is_empty() {
             // 汇总失败清单推给前端(状态条最多展示有限字数,取前 3 条)
-            let summary = failures.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+            let summary = failures
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ");
             let more = if failures.len() > 3 {
                 format!(" 等 {} 项", failures.len())
             } else {
@@ -467,8 +472,7 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
                 .map_err(|e| e.to_string())?;
         }
     }
-    let meta_file = fs::File::open(&meta_path)
-        .map_err(|e| format!("打开临时元数据失败: {e}"))?;
+    let meta_file = fs::File::open(&meta_path).map_err(|e| format!("打开临时元数据失败: {e}"))?;
     writer
         .push_archive_entry(
             SevenZArchiveEntry::from_path(&meta_path, "meta.json".to_string()),
@@ -857,10 +861,9 @@ fn delete_tracks(ids: Vec<String>, state: State<AppState>) -> Result<u32, String
                     deleted += 1;
                     if let Some(parent) = p.parent() {
                         if let Some(stem) = p.file_stem() {
-                            let _ = trash::delete(parent.join(format!(
-                                "{}.lrc",
-                                stem.to_string_lossy()
-                            )));
+                            let _ = trash::delete(
+                                parent.join(format!("{}.lrc", stem.to_string_lossy())),
+                            );
                         }
                         let parent = parent.to_path_buf();
                         if !parents.contains(&parent) {
@@ -1083,8 +1086,7 @@ fn remove_folder(path: String, state: State<AppState>) -> Result<(), String> {
     let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
     lib.folders.retain(|f| f != &path);
     // 组件级前缀匹配:字符串 starts_with 会把 F:\music2 误当成 F:\music 的子目录
-    lib.tracks
-        .retain(|t| !is_under(&t.path, &path));
+    lib.tracks.retain(|t| !is_under(&t.path, &path));
     lib.save(&state.data_dir.join(LIBRARY_FILE))
         .map_err(|e| e.to_string())?;
     Ok(())

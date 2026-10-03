@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::model::{ScanReport, Track};
-use crate::{AppState, IMPORT_DIR_NAME, LIBRARY_FILE, sanitize_name};
+use crate::{sanitize_name, AppState, IMPORT_DIR_NAME, LIBRARY_FILE};
 
 pub const EXTENSIONS: &[&str] = &["mp3", "m4a", "flac", "ogg", "oga", "opus", "wav"];
 /// 目录内兜底封面文件名(不含扩展名)
@@ -19,9 +19,10 @@ const SCAN_VERSION: u32 = 2;
 /// 通过 AppState 的扫描闸防重入:已有扫描进行中时直接返回错误。
 pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
     let state = app.state::<AppState>();
-    let _gate = state.scan_gate.try_lock().map_err(|_| {
-        "已有扫描正在进行,请稍后再试".to_string()
-    })?;
+    let _gate = state
+        .scan_gate
+        .try_lock()
+        .map_err(|_| "已有扫描正在进行,请稍后再试".to_string())?;
     let (folders, existing, prev_version) = {
         let lib = state.lib.lock().map_err(|_| "曲库状态不可用".to_string())?;
         (lib.folders.clone(), lib.tracks.clone(), lib.version)
@@ -29,9 +30,14 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
     // 曲库格式版本不匹配时放弃全部增量复用,重新解析每个文件
     let force_full = prev_version != SCAN_VERSION;
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
-    let by_path: HashMap<String, Track> =
-        existing.iter().map(|t| (t.path.clone(), t.clone())).collect();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    let by_path: HashMap<String, Track> = existing
+        .iter()
+        .map(|t| (t.path.clone(), t.clone()))
+        .collect();
 
     // 先收集文件清单(快),再逐个解析并上报进度。
     // 根条目放行(filter_entry 也会收到遍历根本身),否则登记点开头目录(如 X:\.music)会静默扫空
@@ -141,7 +147,13 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
     }
 
     let removed = existing.iter().filter(|t| !seen.contains(&t.path)).count();
-    let report = ScanReport { added, updated, removed, total, errors };
+    let report = ScanReport {
+        added,
+        updated,
+        removed,
+        total,
+        errors,
+    };
 
     {
         let mut lib = state.lib.lock().map_err(|_| "曲库状态不可用".to_string())?;
@@ -149,7 +161,8 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
         lib.version = SCAN_VERSION;
         // 落盘失败必须上抛:release 构建没有控制台,eprintln 无处可见,
         // 静默失败会让内存态与磁盘态分叉
-        lib.save(&state.data_dir.join(LIBRARY_FILE)).map_err(|e| e.to_string())?;
+        lib.save(&state.data_dir.join(LIBRARY_FILE))
+            .map_err(|e| e.to_string())?;
     }
     Ok(report)
 }
@@ -167,7 +180,10 @@ fn parse_track(
     use lofty::probe::Probe;
     use lofty::tag::ItemKey;
 
-    let tagged = Probe::open(path).map_err(|e| e.to_string())?.read().map_err(|e| e.to_string())?;
+    let tagged = Probe::open(path)
+        .map_err(|e| e.to_string())?
+        .read()
+        .map_err(|e| e.to_string())?;
     let duration = tagged.properties().duration().as_secs_f64();
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
@@ -213,9 +229,9 @@ fn parse_track(
     // TMC 音乐包元数据:同级 meta.json 只补齐标签缺失的字段,不覆盖内嵌标签
     let meta_path = parent.join("meta.json");
     if meta_path.is_file() {
-        if let Ok(v) =
-            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&meta_path).unwrap_or_default())
-        {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(&meta_path).unwrap_or_default(),
+        ) {
             let mget = |k: &str| -> Option<String> {
                 v.get(k)
                     .and_then(|x| x.as_str())
@@ -254,14 +270,17 @@ fn parse_track(
 
     // 歌词:同名 .lrc 伴生文件,或内嵌歌词标签
     let lrc = parent.join(format!("{stem}.lrc"));
-    let lrc_path = lrc
-        .is_file()
-        .then(|| lrc.to_string_lossy().to_string());
+    let lrc_path = lrc.is_file().then(|| lrc.to_string_lossy().to_string());
     let has_lyrics =
         lrc_path.is_some() || tag.and_then(|t| t.get_string(&ItemKey::Lyrics)).is_some();
 
     // 封面:优先内嵌图片(同专辑只落盘一次),其次目录内的 cover/folder 图片
-    let album_key = format!("{}\u{1}{}\u{1}{}", album_artist, album, parent.to_string_lossy());
+    let album_key = format!(
+        "{}\u{1}{}\u{1}{}",
+        album_artist,
+        album,
+        parent.to_string_lossy()
+    );
     let cover = if let Some(c) = album_covers.get(&album_key) {
         Some(c.clone())
     } else {
@@ -274,7 +293,9 @@ fn parse_track(
                     _ => "jpg",
                 };
                 let file = covers_dir.join(format!("{:016x}.{ext}", hash_str(&album_key)));
-                fs::write(&file, pic.data()).ok().map(|_| file.to_string_lossy().to_string())
+                fs::write(&file, pic.data())
+                    .ok()
+                    .map(|_| file.to_string_lossy().to_string())
             });
         }
         if found.is_none() {
@@ -346,7 +367,12 @@ fn write_cover_thumb(covers_dir: &Path, album_key: &str, data: &[u8]) -> Option<
     let file = covers_dir.join(format!("{:016x}.jpg", hash_str(album_key)));
     let mut out = fs::File::create(&file).ok()?;
     JpegEncoder::new_with_quality(&mut out, 85)
-        .write_image(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+        .write_image(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )
         .ok()?;
     Some(file.to_string_lossy().to_string())
 }
@@ -355,7 +381,9 @@ fn write_cover_thumb(covers_dir: &Path, album_key: &str, data: &[u8]) -> Option<
 /// 音频旁路元数据文件的最新修改时间(目录封面 + 同名 .lrc + 旧记录指向的实际封面),
 /// 无则 0。目录封面探测范围与 COVER_NAMES 一致,替换 folder.jpg 等同样能触发重扫
 fn sidecar_mtime(path: &Path, prev_cover: Option<&str>) -> f64 {
-    let Some(parent) = path.parent() else { return 0.0 };
+    let Some(parent) = path.parent() else {
+        return 0.0;
+    };
     let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
         return 0.0;
     };
@@ -437,8 +465,11 @@ fn organize_top_level(import_dir: &Path, files: &mut Vec<PathBuf>) {
         if !matches!(ext.as_deref(), Some(e) if EXTENSIONS.contains(&e)) {
             continue;
         }
-        let Some(name) = path.file_name().map(|n| n.to_os_string()) else { continue };
-        let (artist, album) = peek_artist_album(&path).unwrap_or_else(|| ("未整理".into(), "未整理".into()));
+        let Some(name) = path.file_name().map(|n| n.to_os_string()) else {
+            continue;
+        };
+        let (artist, album) =
+            peek_artist_album(&path).unwrap_or_else(|| ("未整理".into(), "未整理".into()));
         let target_dir = import_dir
             .join(sanitize_name(&artist))
             .join(sanitize_name(&album));
@@ -628,7 +659,10 @@ mod tests {
         let mut files = vec![loose.clone()];
         organize_top_level(&import_dir, &mut files);
 
-        let target = import_dir.join("周杰伦").join("未整理").join("周杰伦 - 晴天.wav");
+        let target = import_dir
+            .join("周杰伦")
+            .join("未整理")
+            .join("周杰伦 - 晴天.wav");
         assert!(target.is_file(), "散装文件应归位到 艺人/专辑 目录");
         assert!(!loose.exists());
         assert_eq!(files[0], target);
@@ -657,7 +691,11 @@ mod tests {
         fs::create_dir_all(&target_dir1).unwrap();
         write_wav(&target_dir1.join("周杰伦 - 晴天.wav"));
         let dup = dir1.join("周杰伦 - 晴天.wav");
-        fs::write(&dup, fs::read(target_dir1.join("周杰伦 - 晴天.wav")).unwrap()).unwrap();
+        fs::write(
+            &dup,
+            fs::read(target_dir1.join("周杰伦 - 晴天.wav")).unwrap(),
+        )
+        .unwrap();
         let mut files = vec![dup.clone()];
         organize_top_level(&dir1, &mut files);
         assert!(!dup.exists(), "同内容同名副本应被清理");

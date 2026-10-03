@@ -21,7 +21,8 @@ pub struct LyricsPayload {
 
 impl LyricsPayload {
     fn is_empty(&self) -> bool {
-        self.synced.as_ref().is_none_or(|l| l.is_empty()) && self.plain.as_deref().is_none_or(|p| p.trim().is_empty())
+        self.synced.as_ref().is_none_or(|l| l.is_empty())
+            && self.plain.as_deref().is_none_or(|p| p.trim().is_empty())
     }
 }
 
@@ -80,7 +81,10 @@ pub fn parse(content: &str) -> LyricsPayload {
         if !times.is_empty() {
             let text = s.trim().to_string();
             for t in times {
-                lines.push(LyricLine { time_ms: t, text: text.clone() });
+                lines.push(LyricLine {
+                    time_ms: t,
+                    text: text.clone(),
+                });
             }
         } else if s.starts_with('[') && s.contains(']') {
             // [ti:xxx] 之类的元数据行,跳过
@@ -91,13 +95,30 @@ pub fn parse(content: &str) -> LyricsPayload {
     }
 
     if !lines.is_empty() {
-        lines.sort_by(|a, b| a.time_ms.partial_cmp(&b.time_ms).unwrap_or(std::cmp::Ordering::Equal));
-        let plain = if plain.is_empty() { None } else { Some(plain.join("\n")) };
-        LyricsPayload { synced: Some(lines), plain }
+        lines.sort_by(|a, b| {
+            a.time_ms
+                .partial_cmp(&b.time_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let plain = if plain.is_empty() {
+            None
+        } else {
+            Some(plain.join("\n"))
+        };
+        LyricsPayload {
+            synced: Some(lines),
+            plain,
+        }
     } else if plain.is_empty() {
-        LyricsPayload { synced: None, plain: None }
+        LyricsPayload {
+            synced: None,
+            plain: None,
+        }
     } else {
-        LyricsPayload { synced: None, plain: Some(plain.join("\n")) }
+        LyricsPayload {
+            synced: None,
+            plain: Some(plain.join("\n")),
+        }
     }
 }
 
@@ -132,7 +153,11 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
         return String::from_utf8_lossy(rest).into_owned();
     }
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
-        let enc = if bytes.starts_with(&[0xFF, 0xFE]) { encoding_rs::UTF_16LE } else { encoding_rs::UTF_16BE };
+        let enc = if bytes.starts_with(&[0xFF, 0xFE]) {
+            encoding_rs::UTF_16LE
+        } else {
+            encoding_rs::UTF_16BE
+        };
         let (cow, _, _) = enc.decode(bytes);
         return cow.into_owned();
     }

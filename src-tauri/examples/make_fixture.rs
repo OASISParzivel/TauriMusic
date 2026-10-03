@@ -147,7 +147,10 @@ fn tag_wav(
     }
     let tag = tagged.primary_tag_mut().expect("标签不可用");
     for (key, value) in fields {
-        tag.insert(TagItem::new(key.clone(), ItemValue::Text((*value).to_string())));
+        tag.insert(TagItem::new(
+            key.clone(),
+            ItemValue::Text((*value).to_string()),
+        ));
     }
     if let Some(png) = cover_png {
         tag.push_picture(Picture::new_unchecked(
@@ -158,7 +161,10 @@ fn tag_wav(
         ));
     }
     if let Some(text) = embedded_lyrics {
-        tag.insert(TagItem::new(ItemKey::Lyrics, ItemValue::Text(text.to_string())));
+        tag.insert(TagItem::new(
+            ItemKey::Lyrics,
+            ItemValue::Text(text.to_string()),
+        ));
     }
     let _ = lrc_only; // 仅用于标记该曲目歌词走伴生 .lrc
     tagged

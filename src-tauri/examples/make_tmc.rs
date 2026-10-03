@@ -173,7 +173,10 @@ fn pack(dest: &Path, work: &Path) {
     for p in entries {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         writer
-            .push_archive_entry(SevenZArchiveEntry::from_path(&p, name), std::fs::File::open(&p).ok())
+            .push_archive_entry(
+                SevenZArchiveEntry::from_path(&p, name),
+                std::fs::File::open(&p).ok(),
+            )
             .expect("打包条目失败");
     }
     writer.finish().expect("写 TMC 失败");
@@ -236,7 +239,10 @@ fn tag_wav(
     }
     let tag = tagged.primary_tag_mut().expect("标签不可用");
     for (key, value) in fields {
-        tag.insert(TagItem::new(key.clone(), ItemValue::Text((*value).to_string())));
+        tag.insert(TagItem::new(
+            key.clone(),
+            ItemValue::Text((*value).to_string()),
+        ));
     }
     if let Some(png) = cover_png {
         tag.push_picture(Picture::new_unchecked(
@@ -247,7 +253,10 @@ fn tag_wav(
         ));
     }
     if let Some(text) = lyrics {
-        tag.insert(TagItem::new(ItemKey::Lyrics, ItemValue::Text(text.to_string())));
+        tag.insert(TagItem::new(
+            ItemKey::Lyrics,
+            ItemValue::Text(text.to_string()),
+        ));
     }
     tagged
         .save_to_path(path, WriteOptions::default())
@@ -256,16 +265,33 @@ fn tag_wav(
 
 // 三段原创小旋律(频率 Hz, 时长 s);0.0 表示休止
 const MEL1: &[(f32, f32)] = &[
-    (523.25, 1.2), (659.25, 1.2), (783.99, 1.2), (880.0, 1.2),
-    (783.99, 1.2), (659.25, 1.2), (587.33, 1.2), (523.25, 1.6),
+    (523.25, 1.2),
+    (659.25, 1.2),
+    (783.99, 1.2),
+    (880.0, 1.2),
+    (783.99, 1.2),
+    (659.25, 1.2),
+    (587.33, 1.2),
+    (523.25, 1.6),
 ];
 const MEL2: &[(f32, f32)] = &[
-    (440.0, 1.2), (523.25, 1.2), (659.25, 1.2), (493.88, 1.2),
-    (0.0, 0.6), (659.25, 1.2), (523.25, 1.2), (440.0, 1.6),
+    (440.0, 1.2),
+    (523.25, 1.2),
+    (659.25, 1.2),
+    (493.88, 1.2),
+    (0.0, 0.6),
+    (659.25, 1.2),
+    (523.25, 1.2),
+    (440.0, 1.6),
 ];
 const MEL3: &[(f32, f32)] = &[
-    (587.33, 1.1), (739.99, 1.1), (880.0, 1.1), (739.99, 1.1),
-    (659.25, 1.1), (587.33, 1.1), (523.25, 1.5),
+    (587.33, 1.1),
+    (739.99, 1.1),
+    (880.0, 1.1),
+    (739.99, 1.1),
+    (659.25, 1.1),
+    (587.33, 1.1),
+    (523.25, 1.5),
 ];
 
 const LRC1: &str = "[ti:晨光微凉]\n[ar:林夜]\n[by:TauriMusic 演示]\n\

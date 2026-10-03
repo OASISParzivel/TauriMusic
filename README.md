@@ -14,14 +14,18 @@
   - 同名 `.lrc` 伴生文件
   - 自动处理 GBK / UTF-16 编码的 LRC 文件,以及 "GBK 内容被标记为 Latin-1" 的乱码
   - 全屏播放页支持**逐行同步滚动**的歌词,点击歌词行跳转播放位置
-- **播放**:底部播放条 + 全屏播放页,随机播放 / 列表循环 / 单曲循环,音量与进度记忆
+- **播放**:底部播放条 + 全屏播放页,顺序播放 / 列表循环 / 单曲循环 / 随机播放四态互斥,音量与进度记忆
 - **全局快捷键**:空格 播放/暂停 · ←/→ 快退/快进 · Ctrl+←/→ 切歌 · ↑/↓ 音量 · M 静音 · Esc 关播放页(输入框聚焦时自动让位)
 - **浏览视图**:最近添加、专辑(网格)、艺人(列表 + 详情)、歌曲、全文搜索(歌曲 / 专辑 / 艺人)
+- **批量操作**:歌曲列表 Ctrl/Shift 多选 + 浮动操作条(播放 / 批量导出 / 批量删除),整张专辑一键导出
+- **删除**:单曲与整张专辑删除,音频与歌词移入回收站(可恢复)
 - **深浅色外观**:默认跟随系统,可手动切换
-- **液态玻璃外观**:专辑封面驱动的氛围背景(深度模糊 + 缓慢漂移、随曲目切换淡入淡出),侧栏与播放条为悬浮磨砂玻璃卡片折射氛围色彩,可一键开关
+- **液态玻璃外观**:专辑封面驱动的氛围背景(深度模糊 + 缓慢漂移、随曲目切换淡入淡出),停靠式磨砂玻璃面板折射氛围色彩,可一键开关
 - **TMC 音乐包**:`.tmc` = 标准 7z 包(音频 + 同名 LRC + 封面 + meta.json),支持双击导入 / 拖拽导入 / 一键导出,文件关联开箱即用
 - **直接导入音乐文件**:设置页多选音频文件(或拖入窗口),自动通过网易云公开接口匹配封面与歌词
+- **在线元数据补全**:专辑详情页 / 歌曲页可按网易云公开接口补全缺失封面与歌词(仅元数据,播放始终走本地文件)
 - **首次启动引导**:使用声明 + 感谢信两步式欢迎流程
+- **托盘常驻**:关闭窗口最小化到托盘,音乐不中断;单实例,二次启动唤起已有窗口
 - **关于页资源占用**:实时显示主进程内存与 CPU 占用
 
 ## 支持的格式
@@ -35,7 +39,7 @@ npm install        # 安装前端依赖
 npm run tauri dev  # 开发模式运行
 ```
 
-要求:Node.js ≥ 18、Rust stable、WebView2(Windows 11 自带)。
+要求:Node.js ≥ 20.19、Rust stable、WebView2(Windows 11 自带)。
 
 ## 构建
 
@@ -44,15 +48,35 @@ npm run tauri build             # 产出安装包(msi / nsis)
 npm run tauri build -- --no-bundle  # 仅产出绿色版 exe
 ```
 
-产物位于 `src-tauri/target/release/tauri-music.exe`。
+产物位于 `src-tauri/target/release/tauri-music.exe`。推送 `v*` tag 到 GitHub 会自动构建安装包并发布 Release。
 
-## 生成示例曲库(可选)
-
-生成一组带内嵌封面、内嵌歌词、伴生 LRC 与无标签文件的示例音乐到 `test-music/`,用于体验:
+## 测试与代码质量
 
 ```bash
 cd src-tauri
-cargo run --example make_fixture
+cargo test                        # Rust 单元测试
+cargo clippy --all-targets -- -D warnings   # Rust 静态检查
+cargo fmt --all --check           # 格式检查
+```
+
+```bash
+npm run lint       # ESLint
+npm run build      # vue-tsc 类型检查 + 构建
+```
+
+CI(Linux + Windows)在每次 push/PR 时运行上述全部检查;推 `v*` tag 自动发布安装包。
+
+## 示例工具(可选)
+
+```bash
+cd src-tauri
+cargo run --example make_fixture                        # 生成示例曲库到 test-music/
+cargo run --example make_tmc                            # 生成 TMC 演示包到 demo/
+cargo run --example make_tmc -- extract <包> <目录>      # 解包任意 .tmc(调试用)
+cargo run --example make_tmc -- netease <标题> <艺人>    # 验证网易云匹配
+cargo run --example make_beyond_tmc -- <输入目录> <输出目录> [过滤词]
+                                                        # 批量把目录里的音频打包为 TMC,
+                                                        # 元数据按文件名中的网易云 ID 自动补齐
 ```
 
 ## 项目结构
@@ -60,20 +84,22 @@ cargo run --example make_fixture
 ```
 src/                    # Vue 3 前端
   api.ts                #   Tauri command 封装与类型
-  stores/               #   ui / library / player 三个响应式 store
-  components/           #   侧边栏、播放条、全屏播放页、专辑卡片、曲目列表
+  stores/               #   ui / library / player / shortcuts / context
+  components/           #   顶栏、侧边栏、全屏播放页、曲目列表、弹窗、右键菜单等
   views/                #   最近添加 / 专辑 / 专辑详情 / 艺人 / 歌曲 / 搜索
 src-tauri/
   src/scanner.rs        #   曲库扫描与元数据解析(lofty)
   src/lyrics.rs         #   LRC 解析与编码修复
-  src/model.rs          #   数据模型与 library.json 持久化
-  src/lib.rs            #   Tauri commands
-  examples/make_fixture.rs  # 示例曲库生成器
+  src/model.rs          #   数据模型与 library.json 持久化(原子写 + 备份恢复)
+  src/lib.rs            #   Tauri commands(导入/导出/删除/在线匹配/文件关联/托盘)
+  examples/make_fixture.rs      # 示例曲库生成器
+  examples/make_tmc.rs          # TMC 演示包生成 + 解包/网易云调试工具
+  examples/make_beyond_tmc.rs   # 批量音频打包 TMC(元数据自动补齐)
 ```
 
 ## 数据存储
 
-- 曲库与文件夹配置:`%APPDATA%\com.art3mis.taurimusic\library.json`
+- 曲库与文件夹配置:`%APPDATA%\com.art3mis.taurimusic\library.json`(写入为原子替换,旧文件保留为 `library.json.bak`)
 - 封面缓存:`%LOCALAPPDATA%\com.art3mis.taurimusic\covers\`
 
 删除这两个目录即可完全重置应用。
