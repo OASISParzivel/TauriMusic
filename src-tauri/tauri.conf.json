@@ -44,6 +44,10 @@
       { "name": "TauriMusic OPUS", "ext": ["opus"], "mimeType": "audio/ogg", "description": "OPUS 音频" }
     ],
     "windows": {
+      "wix": {
+        "template": "./wix/main.wxs",
+        "language": ["zh-CN"]
+      },
       "nsis": {
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false
