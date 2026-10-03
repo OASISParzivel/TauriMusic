@@ -43,6 +43,9 @@ function albumMenu(e: MouseEvent, album: Album): void {
 .card {
   cursor: pointer;
   min-width: 0;
+  /* 大曲库性能:视口外的卡片跳过布局与绘制 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
 }
 .cover {
   position: relative;

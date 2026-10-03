@@ -53,6 +53,12 @@ function onDeleteAlbum(): void {
 
 <template>
   <div v-if="album" class="view">
+    <button class="back" @click="go('albums')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14.5 5.5 8 12l6.5 6.5" />
+      </svg>
+      专辑
+    </button>
     <header class="detail-head">
       <div class="cover">
         <img v-if="album.cover" :src="convertFileSrc(album.cover)" alt="" />
@@ -97,6 +103,31 @@ function onDeleteAlbum(): void {
 </template>
 
 <style scoped>
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  width: fit-content;
+  color: var(--accent);
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 4px 10px 4px 4px;
+  margin-bottom: 14px;
+  border-radius: 7px;
+  transition: background 0.2s ease, transform 0.35s var(--ease-spring);
+}
+.back svg {
+  width: 17px;
+  height: 17px;
+}
+.back:hover {
+  background: var(--hover);
+}
+.back:active {
+  transform: scale(0.97);
+  transition-duration: 0.1s;
+}
+
 .detail-head {
   display: flex;
   gap: 28px;

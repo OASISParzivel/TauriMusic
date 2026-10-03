@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import Modal from "./Modal.vue";
 import { ui, setThemeMode, toggleGlass } from "../stores/ui";
-import { lib, openImportDir, addFolder, rescan, importTmcPick } from "../stores/library";
+import { lib, openImportDir, addFolder, rescan, importTmcPick, importMusicPick } from "../stores/library";
 import { api, type AssocState } from "../api";
 
 const themeOptions = [
@@ -15,7 +15,7 @@ const FORMAT_HINT = "支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持�
 const TMC_HINT =
   "TMC 音乐包为标准 7z 压缩包:内含音频、同名 .lrc 歌词、cover.jpg/png 封面与 meta.json 元数据。把 .tmc 拖进窗口即可导入;在歌曲列表悬停某行可一键导出 TMC。";
 const ASSOC_HINT =
-  "勾选后在资源管理器右键\"打开方式\"中可选 TauriMusic,双击 TMC 包直接导入。安装包版本已默认关联 .tmc;要设为默认打开程序,请在文件的\"打开方式 → 选择其他应用\"中勾选\"始终\"。";
+  "勾选后 TauriMusic 出现在右键\"打开方式\"列表,并注册为当前用户的双击默认程序。若双击仍由其他应用打开,说明系统记住了旧默认:请在\"设置 → 默认应用\"中调整,或在文件右键\"打开方式 → 选择其他应用\"勾选\"始终\"。";
 
 const assocs = ref<AssocState[]>([]);
 
@@ -79,6 +79,13 @@ async function toggleAssoc(a: AssocState): Promise<void> {
       </div>
       <p class="dir" :title="lib.importDir">{{ lib.importDir }}</p>
       <p class="hint">{{ FORMAT_HINT }}</p>
+      <div class="row">
+        <span class="row-label">导入音乐文件</span>
+        <div class="btns">
+          <button class="mini" @click="importMusicPick">选择文件</button>
+        </div>
+      </div>
+      <p class="hint">支持多选;导入后自动通过网易云公开接口匹配封面与歌词。</p>
       <div class="row">
         <span class="row-label">TMC 音乐包</span>
         <div class="btns">

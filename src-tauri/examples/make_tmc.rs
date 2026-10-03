@@ -40,7 +40,8 @@ fn main() {
         let client = tauri_music_lib::netease_client();
         println!(
             "封面: {:?}",
-            tauri_music_lib::netease_album_cover(&client, title, title).map(|u| u[..60].to_string())
+            tauri_music_lib::netease_album_cover(&client, title, artist, title)
+                .map(|u| u[..60].to_string())
         );
         match tauri_music_lib::netease_lyric(&client, title, artist) {
             Some(l) => println!("歌词(前120字): {}", l.chars().take(120).collect::<String>()),
@@ -58,7 +59,7 @@ fn main() {
     build(
         &out_dir.join("晨光微凉 - 林夜.tmc"),
         "晨光微凉",
-        &MEL1,
+        MEL1,
         &[
             (ItemKey::TrackTitle, "晨光微凉"),
             (ItemKey::TrackArtist, "林夜"),
@@ -86,7 +87,7 @@ fn main() {
     build(
         &out_dir.join("夜航星 - 林夜.tmc"),
         "夜航星",
-        &MEL2,
+        MEL2,
         &[],
         None,
         None,
@@ -106,7 +107,7 @@ fn main() {
     build(
         &out_dir.join("雨后 - 苏晴.tmc"),
         "雨后",
-        &MEL3,
+        MEL3,
         &[
             (ItemKey::TrackTitle, "雨后"),
             (ItemKey::TrackArtist, "苏晴"),
@@ -201,7 +202,7 @@ fn write_melody(path: &Path, notes: &[(f32, f32)]) {
             } else {
                 0.0
             };
-            let env = (t / 0.03).min(1.0) * (((dur - t) / 0.1).min(1.0)).max(0.0);
+            let env = (t / 0.03).min(1.0) * ((dur - t) / 0.1).clamp(0.0, 1.0);
             data.extend_from_slice(&((v * env * 0.3 * 32767.0) as i16).to_le_bytes());
         }
     }

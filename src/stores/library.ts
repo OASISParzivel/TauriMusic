@@ -25,6 +25,8 @@ interface LibState {
   importDir: string;
   /** 最近一次拖拽导入的结果提示(自动消失) */
   importStatus: string;
+  /** 全部在线匹配进行中 */
+  matching: boolean;
 }
 
 export const lib = reactive<LibState>({
@@ -36,6 +38,7 @@ export const lib = reactive<LibState>({
   scanTotal: 0,
   importDir: "",
   importStatus: "",
+  matching: false,
 });
 
 let importStatusTimer = 0;
@@ -62,19 +65,25 @@ export async function initLibrary(): Promise<void> {
     lib.scanTotal = e.payload.total;
   });
 
-  // 后端处理"打开方式"/命令行导入完成后刷新曲库
+  // 后端处理"打开方式"/命令行导入完成后刷新曲库,并对新增曲目自动在线匹配
   void listen("library-changed", async () => {
     try {
+      const before = new Set(lib.tracks.map((t) => t.id));
       const data = await api.getLibrary();
       lib.tracks = data.tracks;
       lib.folders = data.folders;
+      await enrichNewTracks(before, "已导入");
     } catch (err) {
       console.error("刷新曲库失败", err);
     }
   });
 
   if (lib.folders.length > 0) {
-    void rescan();
+    // 手动放进音乐目录的新文件没有经过导入入口,启动扫描后对新增曲目自动在线匹配;
+    // before 为上次退出时的曲库,匹配失败的旧曲目不会重复请求
+    const before = new Set(lib.tracks.map((t) => t.id));
+    await rescan();
+    await enrichNewTracks(before, "曲库已同步", true);
   }
 }
 
@@ -98,6 +107,7 @@ function flashStatus(text: string): void {
 }
 
 export async function importDropped(paths: string[]): Promise<void> {
+  const before = new Set(lib.tracks.map((t) => t.id));
   const tmc = paths.filter((p) => p.toLowerCase().endsWith(".tmc"));
   const rest = paths.filter((p) => !p.toLowerCase().endsWith(".tmc"));
   const parts: string[] = [];
@@ -120,6 +130,7 @@ export async function importDropped(paths: string[]): Promise<void> {
       const r = await api.importPaths(rest);
       if (r.filesCopied) parts.push(`导入 ${r.filesCopied} 个文件`);
       if (r.foldersAdded) parts.push(`添加 ${r.foldersAdded} 个文件夹`);
+      if (r.duplicates) parts.push(`跳过 ${r.duplicates} 个重复`);
       if (r.skipped) parts.push(`跳过 ${r.skipped} 个不支持`);
     } catch (err) {
       console.error("导入失败", err);
@@ -128,6 +139,8 @@ export async function importDropped(paths: string[]): Promise<void> {
   }
   flashStatus(parts.length ? parts.join(" · ") : "没有可导入的文件");
   await rescan();
+  // 导入后自动在线补全新增曲目的封面与歌词(拖拽文件夹导入的同样生效)
+  await enrichNewTracks(before, parts.length ? parts.join(" · ") : "已导入");
 }
 
 /** 从文件选择器导入 .tmc 音乐包(设置弹窗入口) */
@@ -135,6 +148,93 @@ export async function importTmcPick(): Promise<void> {
   const path = await api.pickTmcFile();
   if (!path) return;
   await importDropped([path]);
+}
+
+/** 逐张专辑在线补全,返回有更新的专辑数 */
+async function enrichKeys(keys: Set<string>): Promise<number> {
+  let enriched = 0;
+  for (const key of keys) {
+    try {
+      const r = await api.neteaseEnrichAlbum(key);
+      if (r.cover || r.lyrics > 0) enriched++;
+    } catch (err) {
+      console.error("在线匹配失败", err);
+    }
+  }
+  return enriched;
+}
+
+/** 找出 before 之后新增曲目中缺封面/歌词的专辑 key */
+function keysOfNewTracks(before: Set<string>): Set<string> {
+  const keys = new Set<string>();
+  for (const t of lib.tracks) {
+    if (!before.has(t.id) && (!t.cover || !t.lrcPath)) {
+      keys.add(keyOf(t));
+    }
+  }
+  return keys;
+}
+
+/** 导入通用收尾:对新增曲目自动在线匹配封面与歌词,有更新则重扫并刷新提示;quiet 时无新增不提示 */
+async function enrichNewTracks(before: Set<string>, doneMsg: string, quiet = false): Promise<void> {
+  const keys = keysOfNewTracks(before);
+  if (keys.size === 0) {
+    if (!quiet) flashStatus(doneMsg);
+    return;
+  }
+  lib.matching = true;
+  try {
+    flashStatus("正在自动匹配封面与歌词…");
+    const enriched = await enrichKeys(keys);
+    if (enriched > 0) await rescan();
+    flashStatus(enriched > 0 ? `${doneMsg} · 已为 ${enriched} 张专辑补全封面/歌词` : doneMsg);
+  } finally {
+    lib.matching = false;
+  }
+}
+
+/** 歌曲页:为全库缺封面/歌词的专辑在线匹配(网易云公开接口) */
+export async function enrichAllNetease(): Promise<void> {
+  if (lib.matching) return;
+  const keys = new Set<string>();
+  for (const t of lib.tracks) {
+    if (!t.cover || !t.lrcPath) {
+      keys.add(`${t.albumArtist || t.artist}\u{1}${t.album}`);
+    }
+  }
+  if (keys.size === 0) {
+    flashStatus("所有歌曲都已有封面与歌词");
+    return;
+  }
+  lib.matching = true;
+  flashStatus(`正在在线匹配 ${keys.size} 张专辑…`);
+  try {
+    const done = await enrichKeys(keys);
+    if (done > 0) await rescan();
+    flashStatus(done > 0 ? `已为 ${done} 张专辑补全封面/歌词` : "没有找到可匹配的内容");
+  } finally {
+    lib.matching = false;
+  }
+}
+
+/** 直接导入音乐文件:多选 → 复制进导入目录 → 扫描 → 自动在线匹配封面与歌词 */
+export async function importMusicPick(): Promise<void> {
+  const paths = await api.pickAudioFiles();
+  if (!paths || paths.length === 0) return;
+  const before = new Set(lib.tracks.map((t) => t.id));
+  flashStatus(`正在导入 ${paths.length} 个文件…`);
+  try {
+    const r = await api.importPaths(paths);
+    if (!r.filesCopied) {
+      flashStatus(r.duplicates ? `全部为重复文件,已跳过 ${r.duplicates} 个` : "没有新文件可导入");
+      return;
+    }
+    await rescan();
+    await enrichNewTracks(before, `已导入 ${r.filesCopied} 个文件`);
+  } catch (err) {
+    console.error("导入音乐文件失败", err);
+    flashStatus("导入失败");
+  }
 }
 
 /** 把一首歌导出为 .tmc 音乐包(歌曲列表行内入口) */
@@ -216,9 +316,12 @@ export async function rescan(): Promise<void> {
 export async function addFolder(): Promise<void> {
   const path = await api.pickFolder();
   if (!path) return;
+  const before = new Set(lib.tracks.map((t) => t.id));
   await api.addFolder(path);
   if (!lib.folders.includes(path)) lib.folders.push(path);
   await rescan();
+  const added = lib.tracks.filter((t) => !before.has(t.id)).length;
+  await enrichNewTracks(before, `已添加文件夹 · 新增 ${added} 首`);
 }
 
 export async function removeFolder(path: string): Promise<void> {

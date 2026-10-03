@@ -69,3 +69,44 @@ pub struct ScanReport {
     pub total: usize,
     pub errors: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_save_load_roundtrip() {
+        let lib = Library {
+            version: 2,
+            folders: vec!["F:\\music".into()],
+            tracks: vec![Track {
+                id: "abc123".into(),
+                title: "晴天".into(),
+                artist: "周杰伦".into(),
+                album: "叶惠美".into(),
+                track_no: Some(3),
+                duration: 269.2,
+                path: "F:\\music\\晴天.mp3".into(),
+                mtime: 1759000000.5,
+                size: 1024,
+                ..Default::default()
+            }],
+        };
+        let path = std::env::temp_dir().join(format!("tm-lib-{}.json", std::process::id()));
+        lib.save(&path).unwrap();
+        let back = Library::load(&path);
+        assert_eq!(back.version, 2);
+        assert_eq!(back.folders, lib.folders);
+        assert_eq!(back.tracks[0].title, "晴天");
+        assert_eq!(back.tracks[0].track_no, Some(3));
+        assert_eq!(back.tracks[0].mtime, 1759000000.5);
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn library_load_missing_file_returns_default() {
+        let lib = Library::load(Path::new("Z:\\nonexistent\\tm-lib.json"));
+        assert!(lib.tracks.is_empty());
+        assert_eq!(lib.version, 0);
+    }
+}

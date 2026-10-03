@@ -37,8 +37,9 @@ pub struct AppState {
 }
 
 const LIBRARY_FILE: &str = "library.json";
-/// 应用自带的音乐导入目录(data_dir/Music),随应用首次启动创建并登记
-const IMPORT_DIR_NAME: &str = "Music";
+/// 应用自带的音乐导入目录(data_dir/Music),随应用首次启动创建并登记;
+/// 扫描器会把顶层散装音频按「艺人\专辑」归位到该目录下
+pub(crate) const IMPORT_DIR_NAME: &str = "Music";
 
 /// 确保导入目录存在,并把它登记进曲库扫描来源
 fn ensure_import_dir(state: &AppState) -> Result<PathBuf, String> {
@@ -75,6 +76,14 @@ pub struct ImportReport {
     folders_added: u32,
     files_copied: u32,
     skipped: u32,
+    duplicates: u32,
+}
+
+/// 单文件复制结果:成功 / 内容重复跳过 / 不支持或已存在跳过
+enum CopyResult {
+    Copied,
+    Duplicate,
+    Skipped,
 }
 
 /// 拖拽导入:整个文件夹登记为扫描来源(不复制),散装音频/歌词文件复制进导入目录
@@ -85,8 +94,15 @@ fn import_paths(paths: Vec<String>, state: State<AppState>) -> Result<ImportRepo
         folders_added: 0,
         files_copied: 0,
         skipped: 0,
+        duplicates: 0,
     };
     let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    // 内容去重基准:曲库已有文件的 (路径, 大小) + 本次会话刚复制的文件
+    let mut known: Vec<(String, u64)> = lib
+        .tracks
+        .iter()
+        .map(|t| (t.path.clone(), t.size))
+        .collect();
     for raw in &paths {
         let path = Path::new(raw);
         if path.is_dir() {
@@ -96,10 +112,15 @@ fn import_paths(paths: Vec<String>, state: State<AppState>) -> Result<ImportRepo
                 report.folders_added += 1;
             }
         } else if path.is_file() {
-            match copy_into_import_dir(path, &import_dir) {
-                Ok(true) => report.files_copied += 1,
-                Ok(false) => report.skipped += 1,
-                Err(_) => report.skipped += 1,
+            match copy_into_import_dir(path, &import_dir, &known) {
+                Ok(CopyResult::Copied) => {
+                    if let (Ok(m), Some(name)) = (fs::metadata(path), path.file_name()) {
+                        known.push((import_dir.join(name).to_string_lossy().to_string(), m.len()));
+                    }
+                    report.files_copied += 1;
+                }
+                Ok(CopyResult::Duplicate) => report.duplicates += 1,
+                _ => report.skipped += 1,
             }
         } else {
             report.skipped += 1;
@@ -110,8 +131,38 @@ fn import_paths(paths: Vec<String>, state: State<AppState>) -> Result<ImportRepo
     Ok(report)
 }
 
-/// 把单个文件复制进导入目录;只收音频与 .lrc 歌词,同名同大小视为已存在
-fn copy_into_import_dir(src: &Path, import_dir: &Path) -> Result<bool, String> {
+/// 两个文件内容是否完全一致(仅在大小相同时调用才有意义)
+fn same_file_content(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(mut fa), Ok(mut fb)) = (fs::File::open(a), fs::File::open(b)) else {
+        return false;
+    };
+    let mut ba = [0u8; 64 * 1024];
+    let mut bb = [0u8; 64 * 1024];
+    loop {
+        let (Ok(n1), Ok(n2)) = (fa.read(&mut ba), fb.read(&mut bb)) else {
+            return false;
+        };
+        if n1 != n2 {
+            return false;
+        }
+        if n1 == 0 {
+            return true;
+        }
+        if ba[..n1] != bb[..n2] {
+            return false;
+        }
+    }
+}
+
+/// 把单个文件复制进导入目录;只收音频与 .lrc 歌词。
+/// 去重规则:同名同大小视为已存在;与曲库或本次会话已知文件大小相同且内容一致视为重复;
+/// 同名但大小不同视为新版本,覆盖旧文件。
+fn copy_into_import_dir(
+    src: &Path,
+    import_dir: &Path,
+    known: &[(String, u64)],
+) -> Result<CopyResult, String> {
     let supported = src
         .extension()
         .and_then(|e| e.to_str())
@@ -121,10 +172,10 @@ fn copy_into_import_dir(src: &Path, import_dir: &Path) -> Result<bool, String> {
         })
         .unwrap_or(false);
     if !supported {
-        return Ok(false);
+        return Ok(CopyResult::Skipped);
     }
     let Some(name) = src.file_name() else {
-        return Ok(false);
+        return Ok(CopyResult::Skipped);
     };
     let dest = import_dir.join(name);
     if dest.exists() {
@@ -133,17 +184,29 @@ fn copy_into_import_dir(src: &Path, import_dir: &Path) -> Result<bool, String> {
             _ => false,
         };
         if same {
-            return Ok(false);
+            return Ok(CopyResult::Skipped);
+        }
+    } else if let Ok(m) = fs::metadata(src) {
+        // 内容级去重:与已知文件大小相同再比字节(候选最多比 5 个,避免大文件 IO 过久)
+        let size = m.len();
+        let mut checked = 0u32;
+        for (p, s) in known {
+            if *s == size && checked < 5 {
+                checked += 1;
+                if same_file_content(src, Path::new(p)) {
+                    return Ok(CopyResult::Duplicate);
+                }
+            }
         }
     }
     fs::copy(src, &dest)
-        .map(|_| true)
+        .map(|_| CopyResult::Copied)
         .map_err(|e| format!("复制 {} 失败: {e}", src.display()))
 }
 
 // ===== TMC 音乐包(.tmc = 标准 7z:音频 + 同名 .lrc 歌词 + cover 封面 + meta.json) =====
 
-fn sanitize_name(s: &str) -> String {
+pub(crate) fn sanitize_name(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
         match c {
@@ -152,8 +215,20 @@ fn sanitize_name(s: &str) -> String {
             c => out.push(c),
         }
     }
-    let t = out.trim().to_string();
-    if t.is_empty() { "track".into() } else { t }
+    // Windows 文件名:首尾空白与结尾的点会被静默吞掉或报错,保留名不可用
+    let mut t = out.trim().trim_end_matches(['.', ' ']).to_string();
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.contains(&t.to_ascii_uppercase().as_str()) {
+        t.insert(0, '_');
+    }
+    if t.is_empty() {
+        "track".into()
+    } else {
+        t
+    }
 }
 
 /// 解包 .tmc 到导入目录下的同名子目录,由扫描器拾取(meta.json 会补齐缺失标签)
@@ -198,6 +273,16 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
             Ok(d) => d,
             Err(_) => return,
         };
+        let known: Vec<(String, u64)> = state
+            .lib
+            .lock()
+            .map(|lib| {
+                lib.tracks
+                    .iter()
+                    .map(|t| (t.path.clone(), t.size))
+                    .collect()
+            })
+            .unwrap_or_default();
         for p in &paths {
             let ext = p
                 .extension()
@@ -206,7 +291,7 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
             let _ = if ext == "tmc" {
                 import_tmc_file(p, &state)
             } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
-                copy_into_import_dir(p, &import_dir).map(|_| String::new())
+                copy_into_import_dir(p, &import_dir, &known).map(|_| String::new())
             } else {
                 Ok(String::new())
             };
@@ -258,8 +343,11 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
         "trackNo": t.track_no,
         "genre": t.genre,
     });
-    fs::write(&meta_path, serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    fs::write(
+        &meta_path,
+        serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
 
     let mut dest_path = PathBuf::from(dest);
     if dest_path
@@ -298,7 +386,11 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
                 .extension()
                 .map(|e| e.to_string_lossy().to_lowercase().to_string())
                 .unwrap_or_else(|| "jpg".into());
-            let cname = if cext == "png" { "cover.png" } else { "cover.jpg" };
+            let cname = if cext == "png" {
+                "cover.png"
+            } else {
+                "cover.jpg"
+            };
             writer
                 .push_archive_entry(
                     SevenZArchiveEntry::from_path(cover_path, cname.to_string()),
@@ -330,13 +422,33 @@ async fn pick_tmc_file() -> Option<String> {
 
 #[tauri::command]
 async fn pick_tmc_dest(default_name: String) -> Option<String> {
+    // 标签里的标题可能含 \ / 等文件系统非法字符,默认名先清洗
+    let name = sanitize_name(&default_name);
     rfd::AsyncFileDialog::new()
         .set_title("导出 TMC 音乐包")
         .add_filter("TMC 音乐包 (*.tmc)", &["tmc"])
-        .set_file_name(&format!("{default_name}.tmc"))
+        .set_file_name(format!("{name}.tmc"))
         .save_file()
         .await
         .map(|f| f.path().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn pick_audio_files() -> Option<Vec<String>> {
+    rfd::AsyncFileDialog::new()
+        .set_title("选择音乐文件")
+        .add_filter(
+            "音频文件",
+            &["mp3", "m4a", "flac", "ogg", "oga", "opus", "wav"],
+        )
+        .pick_files()
+        .await
+        .map(|files| {
+            files
+                .iter()
+                .map(|f| f.path().to_string_lossy().to_string())
+                .collect()
+        })
 }
 
 // ===== 在线元数据补全(网易云公开接口,仅补封面/歌词,不涉及流媒体) =====
@@ -360,7 +472,10 @@ async fn netease_enrich_album(
         .map_err(|e| e.to_string())?
 }
 
-fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<NeteaseReport, String> {
+fn netease_enrich_blocking(
+    album_key: &str,
+    app: &tauri::AppHandle,
+) -> Result<NeteaseReport, String> {
     let state = app.state::<AppState>();
 
     // 触碰音频文件 mtime,让增量扫描感知旁路元数据(cover.jpg/.lrc)已更新
@@ -385,12 +500,16 @@ fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<Ne
 
     let client = netease_client();
 
-    let mut report = NeteaseReport { cover: false, lyrics: 0, skipped: 0 };
+    let mut report = NeteaseReport {
+        cover: false,
+        lyrics: 0,
+        skipped: 0,
+    };
 
     // 封面:存在无封面曲目时才匹配(先按专辑名搜专辑图,再回退按歌名搜歌曲所属专辑图)
     if tracks.iter().any(|t| t.cover.is_none()) {
         let first = &tracks[0];
-        match netease_album_cover(&client, &first.album, &first.title) {
+        match netease_album_cover(&client, &first.album, &first.album_artist, &first.title) {
             Some(pic_url) => match client.get(&pic_url).send() {
                 Ok(resp) if resp.status().is_success() => match resp.bytes() {
                     Ok(bytes) => {
@@ -401,8 +520,47 @@ fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<Ne
                             .collect();
                         dirs.sort();
                         dirs.dedup();
-                        for d in dirs {
-                            let _ = fs::write(d.join("cover.jpg"), &bytes);
+                        // 混居目录(同一目录里还有其他专辑的曲目)不能写共享 cover.jpg,
+                        // 否则目录里所有专辑都会套上同一张封面
+                        let multi_dirs: std::collections::HashSet<PathBuf> = {
+                            let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+                            dirs.iter()
+                                .filter(|d| {
+                                    let mut seen = std::collections::HashSet::new();
+                                    for t in &lib.tracks {
+                                        if Path::new(&t.path)
+                                            .parent()
+                                            .map(|p| p == **d)
+                                            .unwrap_or(false)
+                                        {
+                                            seen.insert(format!(
+                                                "{}\u{1}{}",
+                                                t.album_artist, t.album
+                                            ));
+                                        }
+                                    }
+                                    seen.len() > 1
+                                })
+                                .cloned()
+                                .collect()
+                        };
+                        for d in &dirs {
+                            if multi_dirs.contains(d) {
+                                // 写曲目专属旁路封面:{歌名}.cover.jpg
+                                for t in tracks.iter().filter(|t| t.cover.is_none()) {
+                                    let tp = Path::new(&t.path);
+                                    if tp.parent().map(|p| p == d.as_path()).unwrap_or(false) {
+                                        let stem = tp
+                                            .file_stem()
+                                            .map(|s| s.to_string_lossy().to_string())
+                                            .unwrap_or_default();
+                                        let _ =
+                                            fs::write(d.join(format!("{stem}.cover.jpg")), &bytes);
+                                    }
+                                }
+                            } else {
+                                let _ = fs::write(d.join("cover.jpg"), &bytes);
+                            }
                         }
                         // 让该专辑所有无封面曲目在增量扫描中被重新解析
                         for t in tracks.iter().filter(|t| t.cover.is_none()) {
@@ -422,7 +580,9 @@ fn netease_enrich_blocking(album_key: &str, app: &tauri::AppHandle) -> Result<Ne
     for t in tracks.iter().filter(|t| t.lrc_path.is_none()) {
         match netease_lyric(&client, &t.title, &t.artist) {
             Some(text) => {
-                let parent = Path::new(&t.path).parent().unwrap_or_else(|| Path::new("."));
+                let parent = Path::new(&t.path)
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."));
                 let stem = Path::new(&t.path)
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
@@ -451,7 +611,40 @@ pub fn netease_client() -> reqwest::blocking::Client {
         .expect("网络客户端初始化失败")
 }
 
-fn netease_search(client: &reqwest::blocking::Client, keyword: &str, search_type: u32, limit: u32) -> Option<serde_json::Value> {
+/// 归一化标签用于跨源比对:繁体转简体 + 小写 + 去空白(本地标签常见繁体/大小写差异)
+fn normalize_tag(s: &str) -> String {
+    use character_converter::CharacterConverter;
+    static CONVERTER: std::sync::OnceLock<CharacterConverter> = std::sync::OnceLock::new();
+    let converter = CONVERTER.get_or_init(CharacterConverter::new);
+    converter
+        .traditional_to_simplified(s)
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// 归一化后的双向包含比对
+fn name_matches(a: &str, b: &str) -> bool {
+    let (a, b) = (normalize_tag(a), normalize_tag(b));
+    !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
+}
+
+/// 艺人组任一分段与候选名比对成功即通过
+fn artist_matches(artist: &str, candidate: &str) -> bool {
+    artist
+        .split(['/', '&', ',', '、'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .any(|seg| name_matches(seg, candidate))
+}
+
+fn netease_search(
+    client: &reqwest::blocking::Client,
+    keyword: &str,
+    search_type: u32,
+    limit: u32,
+) -> Option<serde_json::Value> {
     let resp = client
         .post("https://music.163.com/api/search/get/web")
         .header("Referer", "https://music.163.com")
@@ -469,24 +662,63 @@ fn netease_search(client: &reqwest::blocking::Client, keyword: &str, search_type
     resp.json::<serde_json::Value>().ok()
 }
 
-/// 专辑封面:先按专辑名搜专辑,搜不到再按歌名搜歌曲取其所属专辑图
-pub fn netease_album_cover(client: &reqwest::blocking::Client, album: &str, fallback_title: &str) -> Option<String> {
+/// 专辑封面:按专辑名搜专辑并校验艺人,无命中再按歌名搜歌曲取其所属专辑图。
+/// 不校验艺人会拿到同名但毫无关系的专辑封面(如「Control」会命中 Janet Jackson)。
+pub fn netease_album_cover(
+    client: &reqwest::blocking::Client,
+    album: &str,
+    album_artist: &str,
+    fallback_title: &str,
+) -> Option<String> {
     if let Some(v) = netease_search(client, album, 10, 5) {
-        if let Some(url) = v.pointer("/result/albums/0/picUrl").and_then(|x| x.as_str()) {
-            return Some(url.replace("http://", "https://"));
+        if let Some(albums) = v.pointer("/result/albums").and_then(|x| x.as_array()) {
+            // 优先取艺人对得上的专辑,全对不上时不用专辑搜索结果(大概率是同名的别家)
+            if let Some(pic) = albums
+                .iter()
+                .find(|a| {
+                    a["artist"]["name"]
+                        .as_str()
+                        .map(|n| artist_matches(album_artist, n))
+                        .unwrap_or(false)
+                })
+                .and_then(|a| a["picUrl"].as_str())
+            {
+                return Some(pic.replace("http://", "https://"));
+            }
         }
     }
+    // 回退:按歌名搜歌曲,优先艺人对得上的,否则取首个
     let v = netease_search(client, fallback_title, 1, 5)?;
-    v.pointer("/result/songs/0/album/picUrl")
-        .and_then(|x| x.as_str())
-        .map(|s| s.replace("http://", "https://"))
+    let songs = v.pointer("/result/songs")?.as_array()?;
+    let pic = songs
+        .iter()
+        .find(|s| {
+            s["artists"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter().any(|a| {
+                        a["name"]
+                            .as_str()
+                            .map(|n| artist_matches(album_artist, n))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        })
+        .or_else(|| songs.first())?["album"]["picUrl"]
+        .as_str()
+        .map(|s| s.replace("http://", "https://"))?;
+    Some(pic)
 }
 
-/// 歌词:按歌名搜索,优先选艺人名能对上的结果
-pub fn netease_lyric(client: &reqwest::blocking::Client, title: &str, artist: &str) -> Option<String> {
+/// 歌词:按歌名搜索,优先选艺人名能对上的结果(繁简/大小写归一化比对)
+pub fn netease_lyric(
+    client: &reqwest::blocking::Client,
+    title: &str,
+    artist: &str,
+) -> Option<String> {
     let v = netease_search(client, title, 1, 5)?;
     let songs = v.pointer("/result/songs")?.as_array()?;
-    let segments: Vec<&str> = artist.split(['/','&',',','、']).map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
     let pick = songs
         .iter()
         .find(|s| {
@@ -496,7 +728,7 @@ pub fn netease_lyric(client: &reqwest::blocking::Client, title: &str, artist: &s
                     arr.iter().any(|a| {
                         a["name"]
                             .as_str()
-                            .map(|n| segments.iter().any(|seg| n.contains(seg) || seg.contains(n)))
+                            .map(|n| artist_matches(artist, n))
                             .unwrap_or(false)
                     })
                 })
@@ -539,7 +771,8 @@ fn delete_tracks(ids: Vec<String>, state: State<AppState>) -> Result<u32, String
                 }
                 if let Some(parent) = p.parent() {
                     if let Some(stem) = p.file_stem() {
-                        let _ = trash::delete(parent.join(format!("{}.lrc", stem.to_string_lossy())));
+                        let _ =
+                            trash::delete(parent.join(format!("{}.lrc", stem.to_string_lossy())));
                     }
                     let parent = parent.to_path_buf();
                     if !parents.contains(&parent) {
@@ -559,16 +792,15 @@ fn delete_tracks(ids: Vec<String>, state: State<AppState>) -> Result<u32, String
         if d.starts_with(&import_dir) && d != import_dir {
             let has_audio = std::fs::read_dir(&d)
                 .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .any(|e| {
-                            e.path()
-                                .extension()
-                                .map(|x| {
-                                    let x = x.to_string_lossy().to_lowercase();
-                                    scanner::EXTENSIONS.contains(&x.as_str())
-                                })
-                                .unwrap_or(false)
-                        })
+                    rd.filter_map(|e| e.ok()).any(|e| {
+                        e.path()
+                            .extension()
+                            .map(|x| {
+                                let x = x.to_string_lossy().to_lowercase();
+                                scanner::EXTENSIONS.contains(&x.as_str())
+                            })
+                            .unwrap_or(false)
+                    })
                 })
                 .unwrap_or(false);
             if !has_audio {
@@ -618,7 +850,10 @@ fn get_associations() -> Vec<AssocState> {
                 let registered = hkcu
                     .open_subkey(format!(r"Software\Classes\.{ext}\OpenWithProgids"))
                     .ok()
-                    .map(|k| k.get_value::<String, _>(format!("TauriMusic.{ext}")).is_ok())
+                    .map(|k| {
+                        k.get_value::<String, _>(format!("TauriMusic.{ext}"))
+                            .is_ok()
+                    })
                     .unwrap_or(false);
                 AssocState {
                     ext: ext.to_string(),
@@ -671,19 +906,52 @@ fn set_association(ext: String, enable: bool) -> Result<(), String> {
                 .create_subkey(format!(r"Software\Classes\{progid}"))
                 .map_err(|e| e.to_string())?
                 .0;
-            id_key.set_value("", &format!("TauriMusic {desc}"))
+            id_key
+                .set_value("", &format!("TauriMusic {desc}"))
                 .map_err(|e| e.to_string())?;
             let ext_key = hkcu
                 .create_subkey(format!(r"Software\Classes\.{ext}\OpenWithProgids"))
                 .map_err(|e| e.to_string())?
                 .0;
-            ext_key.set_value(&progid, &String::new())
+            ext_key
+                .set_value(&progid, &String::new())
                 .map_err(|e| e.to_string())?;
+            // 用户级默认 ProgID:无 UserChoice 时双击即用 TauriMusic(优先于 HKLM)
+            let def_key = hkcu
+                .create_subkey(format!(r"Software\Classes\.{ext}"))
+                .map_err(|e| e.to_string())?
+                .0;
+            def_key.set_value("", &progid).map_err(|e| e.to_string())?;
         } else {
-            if let Ok(k) = hkcu.open_subkey_with_flags(format!(r"Software\Classes\.{ext}\OpenWithProgids"), KEY_WRITE) {
+            if let Ok(k) = hkcu.open_subkey_with_flags(
+                format!(r"Software\Classes\.{ext}\OpenWithProgids"),
+                KEY_WRITE,
+            ) {
                 let _ = k.delete_value(&progid);
             }
+            // 仅当用户级默认仍指向我们时才摘除,不破坏其他应用的关联
+            if let Ok(k) =
+                hkcu.open_subkey_with_flags(format!(r"Software\Classes\.{ext}"), KEY_WRITE)
+            {
+                let current: Result<String, _> = k.get_value("");
+                if matches!(current, Ok(v) if v == progid) {
+                    let _ = k.delete_value("");
+                }
+            }
             let _ = hkcu.delete_subkey_all(format!(r"Software\Classes\{progid}"));
+        }
+        // 通知 Explorer 立即刷新关联与图标缓存
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SHChangeNotify(
+                wEventId: u32,
+                uFlags: u32,
+                dwItem1: *const std::ffi::c_void,
+                dwItem2: *const std::ffi::c_void,
+            );
+        }
+        unsafe {
+            SHChangeNotify(0x0800_0000, 0x0000, std::ptr::null(), std::ptr::null());
         }
         Ok(())
     }
@@ -789,14 +1057,8 @@ pub fn run() {
         })
         .setup(|app| {
             let handle = app.handle();
-            let data_dir = handle
-                .path()
-                .app_data_dir()
-                .expect("无法确定应用数据目录");
-            let cache_dir = handle
-                .path()
-                .app_cache_dir()
-                .expect("无法确定应用缓存目录");
+            let data_dir = handle.path().app_data_dir().expect("无法确定应用数据目录");
+            let cache_dir = handle.path().app_cache_dir().expect("无法确定应用缓存目录");
             std::fs::create_dir_all(&data_dir).ok();
             std::fs::create_dir_all(cache_dir.join("covers")).ok();
             let lib = Library::load(&data_dir.join(LIBRARY_FILE));
@@ -852,6 +1114,7 @@ pub fn run() {
             export_tmc,
             pick_tmc_file,
             pick_tmc_dest,
+            pick_audio_files,
             netease_enrich_album,
             get_associations,
             set_association,
@@ -860,4 +1123,102 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        artist_matches, copy_into_import_dir, name_matches, same_file_content, sanitize_name,
+        CopyResult,
+    };
+    use std::fs;
+
+    #[test]
+    fn content_compare_matches_identical_files() {
+        let dir = std::env::temp_dir().join(format!("tm-dedup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.bin");
+        let b = dir.join("b.bin");
+        let c = dir.join("c.bin");
+        fs::write(&a, [1u8, 2, 3, 4]).unwrap();
+        fs::write(&b, [1u8, 2, 3, 4]).unwrap();
+        fs::write(&c, [1u8, 2, 3, 5]).unwrap();
+        assert!(same_file_content(&a, &b));
+        assert!(!same_file_content(&a, &c));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn import_rejects_duplicate_content() {
+        let dir = std::env::temp_dir().join(format!("tm-import-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let imp = dir.join("imp");
+        fs::create_dir_all(&imp).unwrap();
+
+        // 曲库里已有的原始文件
+        let origin = dir.join("song.mp3");
+        fs::write(&origin, b"same-audio-content").unwrap();
+        let known = vec![(origin.to_string_lossy().to_string(), 18)];
+
+        // 同内容不同名 → 重复拒收
+        let dup = dir.join("song (1).mp3");
+        fs::write(&dup, b"same-audio-content").unwrap();
+        assert!(matches!(
+            copy_into_import_dir(&dup, &imp, &known),
+            Ok(CopyResult::Duplicate)
+        ));
+
+        // 不同内容 → 正常复制
+        let fresh = dir.join("other.mp3");
+        fs::write(&fresh, b"different-content").unwrap();
+        assert!(matches!(
+            copy_into_import_dir(&fresh, &imp, &known),
+            Ok(CopyResult::Copied)
+        ));
+
+        // 同名同大小 → 已存在跳过
+        let origin_copy = dir.join("origin_copy");
+        fs::copy(&origin, &origin_copy).unwrap();
+        assert!(matches!(
+            copy_into_import_dir(&origin_copy, &imp, &known),
+            Ok(CopyResult::Skipped)
+        ));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn name_matching_is_normalized() {
+        // 大小写
+        assert!(name_matches("Beyond", "BEYOND"));
+        // 繁简
+        assert!(name_matches("湯幻月", "汤幻月"));
+        // 空串不匹配
+        assert!(!name_matches("", "Beyond"));
+        // 无关艺人
+        assert!(!name_matches("Janet Jackson", "Beyond"));
+    }
+
+    #[test]
+    fn artist_group_matches_any_segment() {
+        // 多艺人组里任一命中即可,且繁体「湯」与简体「汤」互通
+        assert!(artist_matches("湯幻月/小义学长", "小义学长"));
+        assert!(artist_matches("湯幻月/小义学长", "汤幻月"));
+        assert!(!artist_matches("湯幻月/小义学长", "张治环"));
+    }
+
+    #[test]
+    fn sanitize_replaces_invalid_filename_chars() {
+        assert_eq!(sanitize_name("a/b\\c:d*e?f\"g<h>i|j"), "a_b_c_d_e_f_g_h_i_j");
+        assert_eq!(sanitize_name("海阔天空"), "海阔天空");
+        assert_eq!(sanitize_name("  Beyond  "), "Beyond");
+        // 结尾的点与空格被 Windows 静默吞掉,一并去掉
+        assert_eq!(sanitize_name("海阔天空. "), "海阔天空");
+        // Windows 保留名加前缀
+        assert_eq!(sanitize_name("CON"), "_CON");
+        assert_eq!(sanitize_name("com1"), "_com1");
+        // 控制字符剔除,空结果回退默认名
+        assert_eq!(sanitize_name("\u{0}\u{1}"), "track");
+        assert_eq!(sanitize_name(""), "track");
+    }
 }

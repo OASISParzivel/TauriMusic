@@ -48,6 +48,7 @@ export interface ImportReport {
   foldersAdded: number;
   filesCopied: number;
   skipped: number;
+  duplicates: number;
 }
 
 export interface NeteaseReport {
@@ -82,6 +83,7 @@ export const api = {
   importTmc: (path: string) => invoke<string>("import_tmc", { path }),
   exportTmc: (id: string, dest: string) => invoke<string>("export_tmc", { id, dest }),
   pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
+  pickAudioFiles: () => invoke<string[] | null>("pick_audio_files"),
   pickTmcDest: (defaultName: string) => invoke<string | null>("pick_tmc_dest", { defaultName }),
   neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
   getAssociations: () => invoke<AssocState[]>("get_associations"),

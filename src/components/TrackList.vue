@@ -114,6 +114,9 @@ function rowMenu(e: MouseEvent, t: Track): void {
   cursor: pointer;
   min-width: 0;
   transition: background 0.25s var(--ease-out-soft);
+  /* 大曲库性能:视口外的行跳过布局与绘制 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 54px;
 }
 .row:hover {
   background: var(--hover);
