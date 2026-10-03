@@ -957,7 +957,7 @@ fn set_association(ext: String, enable: bool) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = (desc, exe);
+        let _ = (desc, exe, enable);
         Err("仅支持 Windows".into())
     }
 }
