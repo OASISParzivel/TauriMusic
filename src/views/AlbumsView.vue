@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { albums } from "../stores/library";
 import { openAlbum } from "../stores/ui";
 import AlbumCard from "../components/AlbumCard.vue";
+import LibGate from "../components/LibGate.vue";
 
 const sorted = computed(() =>
   [...albums.value].sort(
@@ -13,13 +14,15 @@ const sorted = computed(() =>
 
 <template>
   <div class="view">
-    <header class="view-head">
-      <h1>专辑</h1>
-      <span class="count">{{ sorted.length }} 张</span>
-    </header>
-    <div class="grid">
-      <AlbumCard v-for="a in sorted" :key="a.key" :album="a" @open="openAlbum(a.key)" />
-    </div>
+    <LibGate>
+      <header class="view-head">
+        <h1>专辑</h1>
+        <span class="count">{{ sorted.length }} 张</span>
+      </header>
+      <div class="grid">
+        <AlbumCard v-for="a in sorted" :key="a.key" :album="a" @open="openAlbum(a.key)" />
+      </div>
+    </LibGate>
   </div>
 </template>
 

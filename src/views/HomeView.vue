@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { albums, lib, addFolder, removeFolder, rescan, albumRecency, openImportDir } from "../stores/library";
+import { albums, lib, addFolder, removeFolder, rescan, albumRecency, openImportDir, reloadLibrary } from "../stores/library";
 import { openAlbum } from "../stores/ui";
 import AlbumCard from "../components/AlbumCard.vue";
 
@@ -16,6 +16,12 @@ function shortPath(p: string): string {
   <div class="view">
     <div v-if="!lib.loaded" class="empty">
       <h2>正在加载曲库…</h2>
+    </div>
+
+    <div v-else-if="lib.loadError" class="empty">
+      <h2>曲库读取失败</h2>
+      <p class="load-err">{{ lib.loadError }}</p>
+      <button class="primary-pill" style="margin-top: 8px" @click="reloadLibrary">重试</button>
     </div>
 
     <div v-else-if="lib.folders.length === 0" class="empty">
@@ -111,6 +117,13 @@ function shortPath(p: string): string {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 24px 20px;
+}
+
+.load-err {
+  color: var(--text-2);
+  font-size: 12px;
+  max-width: 480px;
+  word-break: break-all;
 }
 
 .link {

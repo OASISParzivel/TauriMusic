@@ -42,21 +42,71 @@ pub struct Library {
 }
 
 impl Library {
+    /// 读取曲库:主文件损坏(截断/非法 JSON)时自动回退同名 .bak 备份。
+    /// 两份都不可用才返回空库——此时调用方应让用户感知,而不是无声清空。
     pub fn load(path: &Path) -> Library {
-        fs::read(path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        if let Some(lib) = Self::try_read(path) {
+            return lib;
+        }
+        let bak = backup_path(path);
+        if let Some(lib) = Self::try_read(&bak) {
+            eprintln!("[library] 主文件损坏,已从备份恢复: {}", bak.display());
+            return lib;
+        }
+        Library::default()
     }
 
+    fn try_read(path: &Path) -> Option<Library> {
+        let bytes = fs::read(path).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// 原子保存:先写临时文件,把现有文件备份为 .bak,再 rename 落盘。
+    /// 任何一步失败都不会破坏已有数据。
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        fs::write(path, json)
+
+        let tmp = tmp_path(path);
+        fs::write(&tmp, &json)?;
+
+        // 旧文件先转存为 .bak(首次保存没有旧文件,跳过)
+        if path.exists() {
+            let bak = backup_path(path);
+            let _ = fs::rename(path, &bak);
+        }
+        // rename 同卷内原子替换;失败时把 tmp 留着也比丢数据强
+        match fs::rename(&tmp, path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // rename 失败则退回直接覆盖(极少数平台),至少内容是完整 JSON
+                fs::write(path, &json)?;
+                let _ = fs::remove_file(&tmp);
+                Err(e)
+            }
+        }
     }
+}
+
+fn tmp_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "library.json".into());
+    name.push_str(".tmp");
+    path.with_file_name(name)
+}
+
+fn backup_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "library.json".into());
+    name.push_str(".bak");
+    path.with_file_name(name)
 }
 
 /// 扫描结果报告
@@ -101,6 +151,7 @@ mod tests {
         assert_eq!(back.tracks[0].track_no, Some(3));
         assert_eq!(back.tracks[0].mtime, 1759000000.5);
         fs::remove_file(&path).ok();
+        fs::remove_file(backup_path(&path)).ok();
     }
 
     #[test]
@@ -108,5 +159,71 @@ mod tests {
         let lib = Library::load(Path::new("Z:\\nonexistent\\tm-lib.json"));
         assert!(lib.tracks.is_empty());
         assert_eq!(lib.version, 0);
+    }
+
+    #[test]
+    fn library_load_recovers_from_backup_on_corruption() {
+        let dir = std::env::temp_dir().join(format!("tm-lib-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.json");
+        let bak = backup_path(&path);
+
+        let lib = Library {
+            version: 2,
+            folders: vec!["F:\\music".into()],
+            tracks: vec![Track {
+                id: "x".into(),
+                title: "测试曲目".into(),
+                ..Default::default()
+            }],
+        };
+        // 真实使用节奏:至少保存两次后主文件与备份同时存在
+        lib.save(&path).unwrap();
+        lib.save(&path).unwrap();
+        assert!(bak.exists(), "覆盖保存后应留有 .bak");
+
+        // 模拟写一半崩溃:主文件截断损坏
+        fs::write(&path, b"{\"version\":2,\"folders\":[").unwrap();
+        let recovered = Library::load(&path);
+        assert_eq!(recovered.version, 2);
+        assert_eq!(recovered.folders, vec!["F:\\music".to_string()]);
+        assert_eq!(recovered.tracks.len(), 1);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn library_save_keeps_valid_content_on_successive_writes() {
+        let dir = std::env::temp_dir().join(format!("tm-lib-seq-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.json");
+
+        let first = Library {
+            version: 1,
+            folders: vec![],
+            tracks: vec![Track {
+                id: "a".into(),
+                title: "A".into(),
+                ..Default::default()
+            }],
+        };
+        first.save(&path).unwrap();
+        let second = Library {
+            version: 2,
+            folders: vec![],
+            tracks: vec![Track {
+                id: "b".into(),
+                title: "B".into(),
+                ..Default::default()
+            }],
+        };
+        second.save(&path).unwrap();
+        second.save(&path).unwrap(); // 连续保存也稳定
+
+        let back = Library::load(&path);
+        assert_eq!(back.version, 2);
+        assert_eq!(back.tracks[0].title, "B");
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

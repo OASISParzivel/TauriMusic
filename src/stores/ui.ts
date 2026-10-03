@@ -67,11 +67,13 @@ export function go(view: ViewName): void {
 
 export function openAlbum(key: string): void {
   ui.albumKey = key;
+  ui.search = ""; // 侧栏搜索框残留旧关键词会立刻把详情页拽回搜索页
   ui.view = "album";
 }
 
 export function openArtist(name: string): void {
   ui.artist = name;
+  ui.search = "";
   ui.view = "artists";
 }
 

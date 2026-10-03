@@ -16,6 +16,7 @@ const plain = ref<string | null>(null);
 const activeIdx = ref(-1);
 const lyricsEl = ref<HTMLElement | null>(null);
 const noLyrics = ref(false);
+const loadingLyrics = ref(false);
 
 watch(current, loadLyrics, { immediate: true });
 
@@ -24,8 +25,12 @@ async function loadLyrics(): Promise<void> {
   plain.value = null;
   activeIdx.value = -1;
   noLyrics.value = false;
+  loadingLyrics.value = true;
   const track = current.value;
-  if (!track) return;
+  if (!track) {
+    loadingLyrics.value = false;
+    return;
+  }
   try {
     const payload = await api.getLyrics(track.id);
     if (current.value?.id !== track.id) return;
@@ -38,6 +43,8 @@ async function loadLyrics(): Promise<void> {
   } catch (err) {
     console.error("歌词加载失败", err);
     noLyrics.value = true;
+  } finally {
+    loadingLyrics.value = false;
   }
 }
 
@@ -112,6 +119,7 @@ function onSeek(e: Event): void {
         <div v-else-if="plain" class="lyrics plain">
           <p v-for="(line, i) in plain.split('\n')" :key="i">{{ line }}</p>
         </div>
+        <div v-else-if="loadingLyrics" class="lyrics none">歌词加载中…</div>
         <div v-else class="lyrics none">暂无歌词</div>
       </div>
     </div>

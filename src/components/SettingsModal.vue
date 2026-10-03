@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import Modal from "./Modal.vue";
 import { ui, setThemeMode, toggleGlass } from "../stores/ui";
-import { lib, openImportDir, addFolder, rescan, importTmcPick, importMusicPick } from "../stores/library";
+import { lib, flashStatus, openImportDir, addFolder, rescan, importTmcPick, importMusicPick } from "../stores/library";
 import { api, type AssocState } from "../api";
 
 const themeOptions = [
@@ -33,6 +33,7 @@ async function toggleAssoc(a: AssocState): Promise<void> {
     a.registered = !a.registered;
   } catch (err) {
     console.error("修改格式关联失败", err);
+    flashStatus(`格式关联修改失败: ${String(err)}`);
   }
 }
 </script>

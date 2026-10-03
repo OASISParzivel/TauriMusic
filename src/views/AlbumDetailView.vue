@@ -57,7 +57,10 @@ function onDeleteAlbum(): void {
   }
   confirmingDelete.value = false;
   const ids = album.value.tracks.map((t) => t.id);
-  void deleteTracks(ids).then(() => go("albums"));
+  // 删除失败(文件被占用)时留在原页,状态条已提示
+  void deleteTracks(ids).then((ok) => {
+    if (ok) go("albums");
+  });
 }
 </script>
 

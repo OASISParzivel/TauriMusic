@@ -5,6 +5,7 @@ import { openAlbum, ui } from "../stores/ui";
 import { playTracks } from "../stores/player";
 import AlbumCard from "../components/AlbumCard.vue";
 import TrackList from "../components/TrackList.vue";
+import LibGate from "../components/LibGate.vue";
 
 const selected = computed(() => {
   if (ui.artist && artists.value.includes(ui.artist)) return ui.artist;
@@ -35,41 +36,43 @@ const artistSongs = computed(() => {
 
 <template>
   <div class="view artists">
-    <aside class="list">
-      <header class="view-head"><h1>艺人</h1></header>
-      <button
-        v-for="name in artists"
-        :key="name"
-        class="artist-item"
-        :class="{ active: name === selected }"
-        @click="ui.artist = name"
-      >
-        {{ name }}
-      </button>
-    </aside>
+    <LibGate>
+      <aside class="list">
+        <header class="view-head"><h1>艺人</h1></header>
+        <button
+          v-for="name in artists"
+          :key="name"
+          class="artist-item"
+          :class="{ active: name === selected }"
+          @click="ui.artist = name"
+        >
+          {{ name }}
+        </button>
+      </aside>
 
-    <section v-if="selected" class="detail">
-      <header class="view-head">
-        <h1>{{ selected }}</h1>
-        <span class="count">{{ artistAlbums.length }} 张专辑 · {{ artistSongs.length }} 首歌曲</span>
-      </header>
+      <section v-if="selected" class="detail">
+        <header class="view-head">
+          <h1>{{ selected }}</h1>
+          <span class="count">{{ artistAlbums.length }} 张专辑 · {{ artistSongs.length }} 首歌曲</span>
+        </header>
 
-      <div v-if="artistAlbums.length" class="grid">
-        <AlbumCard v-for="a in artistAlbums" :key="a.key" :album="a" @open="openAlbum(a.key)" />
-      </div>
-
-      <template v-if="artistSongs.length">
-        <div class="sub-label">
-          歌曲
-          <button class="playall" @click="playTracks(artistSongs, 0)">全部播放</button>
+        <div v-if="artistAlbums.length" class="grid">
+          <AlbumCard v-for="a in artistAlbums" :key="a.key" :album="a" @open="openAlbum(a.key)" />
         </div>
-        <TrackList :tracks="artistSongs" show-album show-cover />
-      </template>
-    </section>
 
-    <section v-else class="empty" style="width: 100%">
-      <h2>曲库中还没有艺人</h2>
-    </section>
+        <template v-if="artistSongs.length">
+          <div class="sub-label">
+            歌曲
+            <button class="playall" @click="playTracks(artistSongs, 0)">全部播放</button>
+          </div>
+          <TrackList :tracks="artistSongs" show-album show-cover />
+        </template>
+      </section>
+
+      <section v-else class="empty" style="width: 100%">
+        <h2>曲库中还没有艺人</h2>
+      </section>
+    </LibGate>
   </div>
 </template>
 

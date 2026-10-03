@@ -5,6 +5,7 @@ import { albums, artists, lib, type Album } from "../stores/library";
 import { openAlbum, openArtist, ui } from "../stores/ui";
 import TrackList from "../components/TrackList.vue";
 import AlbumCard from "../components/AlbumCard.vue";
+import LibGate from "../components/LibGate.vue";
 
 const query = computed(() => ui.search.trim().toLowerCase());
 
@@ -44,7 +45,8 @@ const nothing = computed(
 
 <template>
   <div class="view">
-    <template v-if="query">
+    <LibGate>
+      <template v-if="query">
       <section v-if="songs.length" class="section">
         <h2>歌曲</h2>
         <TrackList :tracks="songs" show-album show-cover />
@@ -70,12 +72,13 @@ const nothing = computed(
       <div v-if="nothing" class="empty">
         <h2>没有找到“{{ ui.search }}”相关内容</h2>
       </div>
-    </template>
+      </template>
 
-    <div v-else class="empty">
-      <h2>搜索你的音乐</h2>
-      <p>按歌曲、专辑或艺人名称搜索</p>
-    </div>
+      <div v-else class="empty">
+        <h2>搜索你的音乐</h2>
+        <p>按歌曲、专辑或艺人名称搜索</p>
+      </div>
+    </LibGate>
   </div>
 </template>
 

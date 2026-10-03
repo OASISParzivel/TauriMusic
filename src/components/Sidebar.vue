@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { ui, go } from "../stores/ui";
+import { ui, go, type ViewName } from "../stores/ui";
 import { lib } from "../stores/library";
 
 const navItems = [
@@ -16,9 +16,16 @@ function isActive(name: string): boolean {
   return ui.view === name;
 }
 
+/** 搜索前的视图:清空搜索时回到原处而不是固定落回最近添加 */
+let viewBeforeSearch: ViewName = "home";
+
 function onSearchInput(): void {
-  if (ui.search.trim()) ui.view = "search";
-  else if (ui.view === "search") ui.view = "home";
+  if (ui.search.trim()) {
+    if (ui.view !== "search") viewBeforeSearch = ui.view;
+    ui.view = "search";
+  } else if (ui.view === "search") {
+    ui.view = viewBeforeSearch;
+  }
 }
 
 const statusText = computed(() =>

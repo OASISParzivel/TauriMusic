@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import { allSongs, lib, enrichAllNetease } from "../stores/library";
 import TrackList from "../components/TrackList.vue";
+import LibGate from "../components/LibGate.vue";
 </script>
 
 <template>
   <div class="view">
-    <header class="view-head">
-      <h1>歌曲</h1>
-      <div class="right">
-        <span class="count">{{ allSongs.length }} 首</span>
-        <button class="match-btn" :disabled="lib.matching" @click="enrichAllNetease">
-          {{ lib.matching ? "匹配中…" : "全部在线匹配" }}
-        </button>
-      </div>
-    </header>
-    <TrackList :tracks="allSongs" show-album show-cover />
+    <LibGate>
+      <header class="view-head">
+        <h1>歌曲</h1>
+        <div class="right">
+          <span class="count">{{ allSongs.length }} 首</span>
+          <button class="match-btn" :disabled="lib.matching" @click="enrichAllNetease">
+            {{ lib.matching ? "匹配中…" : "全部在线匹配" }}
+          </button>
+        </div>
+      </header>
+      <TrackList :tracks="allSongs" show-album show-cover />
+    </LibGate>
   </div>
 </template>
 

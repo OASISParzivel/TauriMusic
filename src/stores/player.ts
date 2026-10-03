@@ -37,6 +37,8 @@ export const current = computed<Track | null>(() => player.queue[player.index] ?
 
 let audio: HTMLAudioElement | null = null;
 let raf = 0;
+/** 连续加载失败计数,成功播放后清零(防全坏队列无限跳曲) */
+let errorStreak = 0;
 
 function ensureAudio(): HTMLAudioElement {
   if (audio) return audio;
@@ -51,6 +53,7 @@ function ensureAudio(): HTMLAudioElement {
   };
   audio.addEventListener("play", () => {
     player.playing = true;
+    errorStreak = 0;
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(tick);
   });
@@ -66,6 +69,11 @@ function ensureAudio(): HTMLAudioElement {
   audio.addEventListener("error", () => {
     console.error("播放失败:", audio?.src);
     player.playing = false;
+    // 队列里还有别的歌时自动跳下一曲,连续失败达到队列长度则停止,避免死循环
+    if (player.queue.length > 1 && errorStreak < player.queue.length) {
+      errorStreak += 1;
+      next(false);
+    }
   });
   return audio;
 }
@@ -76,6 +84,38 @@ function load(track: Track): void {
   player.duration = track.duration || 0;
   a.src = convertFileSrc(track.path);
   void a.play().catch(() => {});
+}
+
+/** 删除曲目后同步清理播放队列:修正 index,正在播的被删则清空播放器释放句柄 */
+export function purgeDeleted(ids: string[]): void {
+  if (player.queue.length === 0) return;
+  const deletedSet = new Set(ids);
+  const removedCurrent = !!current.value && deletedSet.has(current.value.id);
+  const kept: Track[] = [];
+  for (const t of player.queue) {
+    if (deletedSet.has(t.id)) continue;
+    kept.push(t);
+  }
+  if (kept.length === player.queue.length) return; // 队列里没有被删的曲子
+  if (removedCurrent || kept.length === 0) {
+    // 正在播的被删:清空播放器
+    const a = ensureAudio();
+    a.pause();
+    a.removeAttribute("src");
+    a.load();
+    player.queue = kept;
+    player.index = -1;
+    player.playing = false;
+    player.position = 0;
+    player.duration = 0;
+    return;
+  }
+  // 非当前播放:重建队列并尽量落在原来的曲子上
+  const before = current.value?.id ?? "";
+  player.queue = kept;
+  let idx = kept.findIndex((t) => t.id === before);
+  if (idx < 0) idx = Math.max(0, Math.min(player.index, kept.length - 1));
+  player.index = idx;
 }
 
 /** 以一组曲目作为队列播放,start 为起始下标 */
@@ -193,19 +233,4 @@ export function fmtTime(s: number): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${String(sec).padStart(2, "0")}`;
-}
-
-/** 删除的曲目若是当前播放,清空播放器避免文件句柄占用 */
-export function releaseIfDeleted(ids: string[]): void {
-  if (current.value && ids.includes(current.value.id)) {
-    const a = ensureAudio();
-    a.pause();
-    a.removeAttribute("src");
-    a.load();
-    player.queue = [];
-    player.index = -1;
-    player.playing = false;
-    player.position = 0;
-    player.duration = 0;
-  }
 }

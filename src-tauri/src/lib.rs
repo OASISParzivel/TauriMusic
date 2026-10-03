@@ -34,14 +34,17 @@ pub struct AppState {
     pub lib: Mutex<Library>,
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,
+    /// 扫描重入闸:同一时刻只允许一次全量扫描
+    pub scan_gate: Mutex<()>,
 }
 
-const LIBRARY_FILE: &str = "library.json";
+pub(crate) const LIBRARY_FILE: &str = "library.json";
 /// 应用自带的音乐导入目录(data_dir/Music),随应用首次启动创建并登记;
 /// 扫描器会把顶层散装音频按「艺人\专辑」归位到该目录下
 pub(crate) const IMPORT_DIR_NAME: &str = "Music";
 
-/// 确保导入目录存在,并把它登记进曲库扫描来源
+/// 确保导入目录存在,并把它登记进曲库扫描来源。
+/// 先落盘成功再改内存,落盘失败时内存态不发生变化。
 fn ensure_import_dir(state: &AppState) -> Result<PathBuf, String> {
     let dir = state.data_dir.join(IMPORT_DIR_NAME);
     fs::create_dir_all(&dir).map_err(|e| format!("创建导入目录失败: {e}"))?;
@@ -49,8 +52,10 @@ fn ensure_import_dir(state: &AppState) -> Result<PathBuf, String> {
     let path = dir.to_string_lossy().to_string();
     if !lib.folders.iter().any(|f| f == &path) {
         lib.folders.push(path);
-        lib.save(&state.data_dir.join(LIBRARY_FILE))
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = lib.save(&state.data_dir.join(LIBRARY_FILE)) {
+            lib.folders.pop();
+            return Err(e.to_string());
+        }
     }
     Ok(dir)
 }
@@ -129,6 +134,12 @@ fn import_paths(paths: Vec<String>, state: State<AppState>) -> Result<ImportRepo
     lib.save(&state.data_dir.join(LIBRARY_FILE))
         .map_err(|e| e.to_string())?;
     Ok(report)
+}
+
+/// 用路径组件判断 target 是否位于 dir 之下(与字符串前缀匹配不同,
+/// 不会把 F:\music2 误当成 F:\music 的子目录)
+fn is_under(child: &str, dir: &str) -> bool {
+    Path::new(child).starts_with(Path::new(dir))
 }
 
 /// 两个文件内容是否完全一致(仅在大小相同时调用才有意义)
@@ -271,7 +282,10 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
         let state = app.state::<AppState>();
         let import_dir = match ensure_import_dir(&state) {
             Ok(d) => d,
-            Err(_) => return,
+            Err(e) => {
+                let _ = app.emit("import-error", format!("导入目录不可用: {e}"));
+                return;
+            }
         };
         let known: Vec<(String, u64)> = state
             .lib
@@ -283,20 +297,41 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
                     .collect()
             })
             .unwrap_or_default();
+        let mut failures: Vec<String> = Vec::new();
         for p in &paths {
             let ext = p
                 .extension()
                 .map(|e| e.to_string_lossy().to_lowercase().to_string())
                 .unwrap_or_default();
-            let _ = if ext == "tmc" {
-                import_tmc_file(p, &state)
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.to_string_lossy().to_string());
+            let result = if ext == "tmc" {
+                import_tmc_file(p, &state).map(|_| ())
             } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
-                copy_into_import_dir(p, &import_dir, &known).map(|_| String::new())
+                copy_into_import_dir(p, &import_dir, &known).map(|_| ())
             } else {
-                Ok(String::new())
+                failures.push(format!("{name}: 不支持的格式"));
+                continue;
             };
+            if let Err(e) = result {
+                failures.push(format!("{name}: {e}"));
+            }
         }
-        let _ = scanner::run_scan(&app);
+        if let Err(e) = scanner::run_scan(&app) {
+            failures.push(format!("扫描失败: {e}"));
+        }
+        if !failures.is_empty() {
+            // 汇总失败清单推给前端(状态条最多展示有限字数,取前 3 条)
+            let summary = failures.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+            let more = if failures.len() > 3 {
+                format!(" 等 {} 项", failures.len())
+            } else {
+                String::new()
+            };
+            let _ = app.emit("import-error", format!("{summary}{more}"));
+        }
         let _ = app.emit("library-changed", ());
     });
 }
@@ -387,19 +422,25 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
     }
 
     let mut writer = SevenZWriter::create(&dest_path).map_err(|e| format!("创建 TMC 失败: {e}"))?;
+    // 打开失败必须报错:SevenZWriter 收到 None reader 会静默写入 size=0 的空条目,
+    // 产出损坏的 .tmc(典型场景:音频正被播放器占用)
+    let audio_file =
+        fs::File::open(audio).map_err(|e| format!("打开音频失败 {}: {e}", audio.display()))?;
     writer
         .push_archive_entry(
             SevenZArchiveEntry::from_path(audio, format!("{stem}.{ext}")),
-            fs::File::open(audio).ok(),
+            Some(audio_file),
         )
         .map_err(|e| e.to_string())?;
     if let Some(lrc) = &t.lrc_path {
         let lrc_path = Path::new(lrc);
         if lrc_path.is_file() {
+            let lrc_file = fs::File::open(lrc_path)
+                .map_err(|e| format!("打开歌词失败 {}: {e}", lrc_path.display()))?;
             writer
                 .push_archive_entry(
                     SevenZArchiveEntry::from_path(lrc_path, format!("{stem}.lrc")),
-                    fs::File::open(lrc_path).ok(),
+                    Some(lrc_file),
                 )
                 .map_err(|e| e.to_string())?;
         }
@@ -416,18 +457,22 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
             } else {
                 "cover.jpg"
             };
+            let cover_file = fs::File::open(cover_path)
+                .map_err(|e| format!("打开封面失败 {}: {e}", cover_path.display()))?;
             writer
                 .push_archive_entry(
                     SevenZArchiveEntry::from_path(cover_path, cname.to_string()),
-                    fs::File::open(cover_path).ok(),
+                    Some(cover_file),
                 )
                 .map_err(|e| e.to_string())?;
         }
     }
+    let meta_file = fs::File::open(&meta_path)
+        .map_err(|e| format!("打开临时元数据失败: {e}"))?;
     writer
         .push_archive_entry(
             SevenZArchiveEntry::from_path(&meta_path, "meta.json".to_string()),
-            fs::File::open(&meta_path).ok(),
+            Some(meta_file),
         )
         .map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| format!("写入 TMC 失败: {e}"))?;
@@ -794,33 +839,48 @@ pub fn netease_lyric(
 fn delete_tracks(ids: Vec<String>, state: State<AppState>) -> Result<u32, String> {
     let import_dir = state.data_dir.join("Music");
     let mut deleted = 0u32;
+    let mut failed = 0u32;
     let mut parents: Vec<PathBuf> = Vec::new();
     {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
         let mut kept: Vec<model::Track> = Vec::with_capacity(lib.tracks.len());
         for t in lib.tracks.drain(..) {
-            if ids.contains(&t.id) {
-                let p = Path::new(&t.path);
-                if trash::delete(p).is_ok() {
-                    deleted += 1;
-                }
-                if let Some(parent) = p.parent() {
-                    if let Some(stem) = p.file_stem() {
-                        let _ =
-                            trash::delete(parent.join(format!("{}.lrc", stem.to_string_lossy())));
-                    }
-                    let parent = parent.to_path_buf();
-                    if !parents.contains(&parent) {
-                        parents.push(parent);
-                    }
-                }
-            } else {
+            if !ids.contains(&t.id) {
                 kept.push(t);
+                continue;
+            }
+            let p = Path::new(&t.path);
+            // 回收站删除失败(文件被占用/权限不足)时保留曲库记录,
+            // 避免"曲库没了文件还在"的幽灵状态;前端会提示失败数量
+            match trash::delete(p) {
+                Ok(()) => {
+                    deleted += 1;
+                    if let Some(parent) = p.parent() {
+                        if let Some(stem) = p.file_stem() {
+                            let _ = trash::delete(parent.join(format!(
+                                "{}.lrc",
+                                stem.to_string_lossy()
+                            )));
+                        }
+                        let parent = parent.to_path_buf();
+                        if !parents.contains(&parent) {
+                            parents.push(parent);
+                        }
+                    }
+                    kept.push(t);
+                }
+                Err(_) => {
+                    failed += 1;
+                    kept.push(t);
+                }
             }
         }
         lib.tracks = kept;
         lib.save(&state.data_dir.join(LIBRARY_FILE))
             .map_err(|e| e.to_string())?;
+    }
+    if failed > 0 {
+        eprintln!("[delete] {failed} 首删除失败(文件被占用?),已保留曲库记录");
     }
     // 导入目录的子目录(非根)如果没有音频文件了,连同残留的 meta/封面一起清掉
     for d in parents {
@@ -1010,8 +1070,10 @@ fn add_folder(path: String, state: State<AppState>) -> Result<(), String> {
     let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
     if !lib.folders.iter().any(|f| f == &path) {
         lib.folders.push(path);
-        lib.save(&state.data_dir.join(LIBRARY_FILE))
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = lib.save(&state.data_dir.join(LIBRARY_FILE)) {
+            lib.folders.pop();
+            return Err(e.to_string());
+        }
     }
     Ok(())
 }
@@ -1020,7 +1082,9 @@ fn add_folder(path: String, state: State<AppState>) -> Result<(), String> {
 fn remove_folder(path: String, state: State<AppState>) -> Result<(), String> {
     let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
     lib.folders.retain(|f| f != &path);
-    lib.tracks.retain(|t| !t.path.starts_with(&path));
+    // 组件级前缀匹配:字符串 starts_with 会把 F:\music2 误当成 F:\music 的子目录
+    lib.tracks
+        .retain(|t| !is_under(&t.path, &path));
     lib.save(&state.data_dir.join(LIBRARY_FILE))
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -1101,6 +1165,7 @@ pub fn run() {
                 lib: Mutex::new(lib),
                 data_dir,
                 cache_dir,
+                scan_gate: Mutex::new(()),
             });
             // 首次启动即建好导入目录并登记为扫描来源
             ensure_import_dir(&app.state::<AppState>()).ok();
@@ -1164,10 +1229,20 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        artist_matches, copy_into_import_dir, name_matches, same_file_content, sanitize_name,
-        CopyResult,
+        artist_matches, copy_into_import_dir, is_under, name_matches, same_file_content,
+        sanitize_name, CopyResult,
     };
     use std::fs;
+
+    #[test]
+    fn is_under_uses_path_components() {
+        // 字符串前缀匹配会把 F:\music2 误当成 F:\music 的子目录,组件匹配不会
+        assert!(is_under(r"F:\music\a.mp3", r"F:\music"));
+        assert!(is_under(r"F:\music\sub\b.mp3", r"F:\music"));
+        assert!(is_under(r"F:\music", r"F:\music"));
+        assert!(!is_under(r"F:\music2\a.mp3", r"F:\music"));
+        assert!(!is_under(r"F:\musica\c.mp3", r"F:\music"));
+    }
 
     #[test]
     fn content_compare_matches_identical_files() {

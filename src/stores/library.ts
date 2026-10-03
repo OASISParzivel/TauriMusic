@@ -2,7 +2,7 @@ import { computed, reactive } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, type Track } from "../api";
-import { releaseIfDeleted } from "./player";
+import { purgeDeleted } from "./player";
 
 export interface Album {
   /** albumArtist + album 组成的唯一键 */
@@ -18,6 +18,8 @@ interface LibState {
   tracks: Track[];
   folders: string[];
   loaded: boolean;
+  /** 启动读库失败(区别于空库,给用户重试入口) */
+  loadError: string | null;
   scanning: boolean;
   scanCurrent: number;
   scanTotal: number;
@@ -33,6 +35,7 @@ export const lib = reactive<LibState>({
   tracks: [],
   folders: [],
   loaded: false,
+  loadError: null,
   scanning: false,
   scanCurrent: 0,
   scanTotal: 0,
@@ -48,8 +51,10 @@ export async function initLibrary(): Promise<void> {
     const data = await api.getLibrary();
     lib.tracks = data.tracks;
     lib.folders = data.folders;
+    lib.loadError = null;
   } catch (err) {
     console.error("读取曲库失败", err);
+    lib.loadError = String(err);
   } finally {
     lib.loaded = true;
   }
@@ -78,6 +83,13 @@ export async function initLibrary(): Promise<void> {
     }
   });
 
+  // 命令行/双击"打开方式"导入的失败清单(后端聚合)
+  void listen<string>("import-error", (e) => {
+    flashStatus(`导入失败: ${e.payload}`);
+  });
+
+  // 读库失败时提供重试;成功才走启动扫描
+  if (lib.loadError) return;
   if (lib.folders.length > 0) {
     // 手动放进音乐目录的新文件没有经过导入入口,启动扫描后对新增曲目自动在线匹配;
     // before 为上次退出时的曲库,匹配失败的旧曲目不会重复请求
@@ -85,6 +97,13 @@ export async function initLibrary(): Promise<void> {
     await rescan();
     await enrichNewTracks(before, "曲库已同步", true);
   }
+}
+
+/** 读库失败后的重试入口 */
+export async function reloadLibrary(): Promise<void> {
+  lib.loaded = false;
+  lib.loadError = null;
+  await initLibrary();
 }
 
 /** 监听文件拖进窗口:.tmc 音乐包走解包导入,文件夹登记扫描,散装音频/歌词复制进导入目录 */
@@ -100,7 +119,8 @@ export async function initDragImport(): Promise<void> {
   }
 }
 
-function flashStatus(text: string): void {
+/** 状态条提示(6 秒自动消失);其他模块也需要报错反馈,故导出 */
+export function flashStatus(text: string): void {
   lib.importStatus = text;
   window.clearTimeout(importStatusTimer);
   importStatusTimer = window.setTimeout(() => (lib.importStatus = ""), 6000);
@@ -296,13 +316,16 @@ export async function enrichAlbumNetease(key: string): Promise<void> {
   await rescan();
 }
 
-/** 删除曲目:音频与歌词移入回收站,曲库同步移除;删除当前播放曲时清空播放器 */
-export async function deleteTracks(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
+/** 删除曲目:音频与歌词移入回收站,曲库同步移除;删除当前播放曲时清空播放器。
+ *  返回是否全部删除成功(失败时调用方应留在原页面并提示)。 */
+export async function deleteTracks(ids: string[]): Promise<boolean> {
+  if (ids.length === 0) return false;
+  let ok = false;
   try {
     const n = await api.deleteTracks(ids);
-    releaseIfDeleted(ids);
-    flashStatus(n > 0 ? `已删除 ${n} 首(移入回收站)` : "删除失败");
+    purgeDeleted(ids);
+    ok = n > 0;
+    flashStatus(n > 0 ? `已删除 ${n} 首(移入回收站)` : "删除失败:文件被占用");
   } catch (err) {
     console.error("删除失败", err);
     flashStatus("删除失败");
@@ -314,6 +337,7 @@ export async function deleteTracks(ids: string[]): Promise<void> {
   } catch (err) {
     console.error("刷新曲库失败", err);
   }
+  return ok;
 }
 
 export async function openImportDir(): Promise<void> {
@@ -345,7 +369,13 @@ export async function addFolder(): Promise<void> {
   const path = await api.pickFolder();
   if (!path) return;
   const before = new Set(lib.tracks.map((t) => t.id));
-  await api.addFolder(path);
+  try {
+    await api.addFolder(path);
+  } catch (err) {
+    console.error("添加文件夹失败", err);
+    flashStatus(`添加文件夹失败: ${String(err)}`);
+    return;
+  }
   if (!lib.folders.includes(path)) lib.folders.push(path);
   await rescan();
   const added = lib.tracks.filter((t) => !before.has(t.id)).length;
@@ -360,7 +390,9 @@ export async function removeFolder(path: string): Promise<void> {
     return;
   }
   lib.folders = lib.folders.filter((f) => f !== path);
-  lib.tracks = lib.tracks.filter((t) => !t.path.startsWith(path));
+  // 组件级前缀:不能字符串 starts_with,否则移除 F:\music 会误伤 F:\music2
+  const prefix = path.endsWith("\\") ? path : `${path}\\`;
+  lib.tracks = lib.tracks.filter((t) => t.path !== path && !t.path.startsWith(prefix));
 }
 
 const keyOf = (t: Track) => `${t.albumArtist || t.artist}\u{1}${t.album}`;

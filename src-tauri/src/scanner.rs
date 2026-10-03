@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::model::{ScanReport, Track};
-use crate::{AppState, IMPORT_DIR_NAME, sanitize_name};
+use crate::{AppState, IMPORT_DIR_NAME, LIBRARY_FILE, sanitize_name};
 
 pub const EXTENSIONS: &[&str] = &["mp3", "m4a", "flac", "ogg", "oga", "opus", "wav"];
 /// 目录内兜底封面文件名(不含扩展名)
@@ -16,8 +16,12 @@ const COVER_NAMES: &[&str] = &["cover", "folder", "front", "album", "albumart"];
 const SCAN_VERSION: u32 = 2;
 
 /// 全量扫描所有已登记的音乐文件夹,与旧曲库做增量合并后落盘。
+/// 通过 AppState 的扫描闸防重入:已有扫描进行中时直接返回错误。
 pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
     let state = app.state::<AppState>();
+    let _gate = state.scan_gate.try_lock().map_err(|_| {
+        "已有扫描正在进行,请稍后再试".to_string()
+    })?;
     let (folders, existing, prev_version) = {
         let lib = state.lib.lock().map_err(|_| "曲库状态不可用".to_string())?;
         (lib.folders.clone(), lib.tracks.clone(), lib.version)
@@ -29,13 +33,14 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
     let by_path: HashMap<String, Track> =
         existing.iter().map(|t| (t.path.clone(), t.clone())).collect();
 
-    // 先收集文件清单(快),再逐个解析并上报进度
+    // 先收集文件清单(快),再逐个解析并上报进度。
+    // 根条目放行(filter_entry 也会收到遍历根本身),否则登记点开头目录(如 X:\.music)会静默扫空
     let mut files: Vec<PathBuf> = Vec::new();
     for folder in &folders {
         for entry in walkdir::WalkDir::new(folder)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .filter_entry(|e| e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.'))
         {
             let Ok(entry) = entry else { continue };
             if !entry.file_type().is_file() {
@@ -66,7 +71,6 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
 
     for (i, path) in files.iter().enumerate() {
         let path_str = path.to_string_lossy().to_string();
-        seen.insert(path_str.clone());
 
         let (mtime, size) = match fs::metadata(path) {
             Ok(m) => (
@@ -78,10 +82,12 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
                 m.len(),
             ),
             Err(_) => {
+                // 文件在遍历与 stat 之间消失:不算 seen,让它落入 removed 口径
                 errors += 1;
                 continue;
             }
         };
+        seen.insert(path_str.clone());
 
         let cached = by_path.get(&path_str).cloned();
         if let Some(prev) = &cached {
@@ -102,7 +108,7 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
                 && prev.size == size
                 && cover_ok
                 && lrc_ok
-                && sidecar_mtime(path) <= prev.mtime + 0.5
+                && sidecar_mtime(path, prev.cover.as_deref()) <= prev.mtime + 0.5
                 && !force_full
             {
                 result.push(prev.clone());
@@ -141,9 +147,9 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
         let mut lib = state.lib.lock().map_err(|_| "曲库状态不可用".to_string())?;
         lib.tracks = result;
         lib.version = SCAN_VERSION;
-        if let Err(e) = lib.save(&state.data_dir.join("library.json")) {
-            eprintln!("[scan] 曲库落盘失败: {e}");
-        }
+        // 落盘失败必须上抛:release 构建没有控制台,eprintln 无处可见,
+        // 静默失败会让内存态与磁盘态分叉
+        lib.save(&state.data_dir.join(LIBRARY_FILE)).map_err(|e| e.to_string())?;
     }
     Ok(report)
 }
@@ -346,20 +352,28 @@ fn write_cover_thumb(covers_dir: &Path, album_key: &str, data: &[u8]) -> Option<
 }
 
 /// 音频旁路元数据文件的最新修改时间(封面 cover.* / {stem}.cover.* 与同名 .lrc),无则 0
-fn sidecar_mtime(path: &Path) -> f64 {
+/// 音频旁路元数据文件的最新修改时间(目录封面 + 同名 .lrc + 旧记录指向的实际封面),
+/// 无则 0。目录封面探测范围与 COVER_NAMES 一致,替换 folder.jpg 等同样能触发重扫
+fn sidecar_mtime(path: &Path, prev_cover: Option<&str>) -> f64 {
     let Some(parent) = path.parent() else { return 0.0 };
     let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
         return 0.0;
     };
-    ["cover.jpg", "cover.jpeg", "cover.png", "cover.webp"]
-        .iter()
-        .map(|n| parent.join(n))
-        .chain(
-            ["jpg", "jpeg", "png", "webp"]
-                .iter()
-                .map(|e| parent.join(format!("{stem}.cover.{e}"))),
-        )
-        .chain(std::iter::once(parent.join(format!("{stem}.lrc"))))
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for name in COVER_NAMES {
+        for ext in ["jpg", "jpeg", "png", "webp"] {
+            candidates.push(parent.join(format!("{name}.{ext}")));
+        }
+    }
+    for ext in ["jpg", "jpeg", "png", "webp"] {
+        candidates.push(parent.join(format!("{stem}.cover.{ext}")));
+    }
+    candidates.push(parent.join(format!("{stem}.lrc")));
+    if let Some(c) = prev_cover {
+        candidates.push(PathBuf::from(c));
+    }
+    candidates
+        .into_iter()
         .filter_map(|p| fs::metadata(p).ok())
         .filter_map(|m| m.modified().ok())
         .filter_map(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -499,13 +513,31 @@ mod tests {
         let dir = temp_dir("sidecar");
         let audio = dir.join("song.mp3");
         fs::write(&audio, b"x").unwrap();
-        assert_eq!(sidecar_mtime(&audio), 0.0);
+        assert_eq!(sidecar_mtime(&audio, None), 0.0);
         fs::write(dir.join("cover.jpg"), b"x").unwrap();
-        assert!(sidecar_mtime(&audio) > 0.0);
+        assert!(sidecar_mtime(&audio, None) > 0.0);
         fs::write(dir.join("song.lrc"), b"[00:00]t").unwrap();
         fs::write(dir.join("song.cover.png"), b"x").unwrap();
-        assert!(sidecar_mtime(&audio) > 0.0);
+        assert!(sidecar_mtime(&audio, None) > 0.0);
+        // 非默认名单的封面(folder.*)也应计入,与目录封面回退逻辑一致
+        fs::write(dir.join("folder.jpg"), b"x").unwrap();
+        assert!(sidecar_mtime(&audio, None) > 0.0);
+        // 旧记录指向的实际封面路径(如缓存目录)同样计入
+        let elsewhere = temp_dir("sidecar-elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("cached.png"), b"x").unwrap();
+        let cached = elsewhere.join("cached.png");
+        assert!(sidecar_mtime(&audio, Some(cached.to_str().unwrap())) > 0.0);
         fs::remove_dir_all(&dir).ok();
+        fs::remove_dir_all(&elsewhere).ok();
+    }
+
+    #[test]
+    fn scan_gate_rejects_concurrent_scan() {
+        // 直接验证闸门互斥:同一线程先锁住闸,第二次 try_lock 必须失败
+        let gate = std::sync::Mutex::new(());
+        let _g1 = gate.try_lock().unwrap();
+        assert!(gate.try_lock().is_err());
     }
 
     /// 写一个 lofty 可解析的最小 WAV(44 字节标准头 + 100 字节静音,PCM 8bit 单声道 8000Hz)
