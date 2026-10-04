@@ -3,12 +3,9 @@ import { computed } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { lib } from "../stores/library";
 import { openPlaylist, ui } from "../stores/ui";
-import { openCtx } from "../stores/context";
 import {
   askCreatePlaylist,
-  askRenamePlaylist,
-  deletePlaylist,
-  exportPlaylist,
+  openPlaylistMenu,
   resolvePlaylist,
   type ResolvedEntry,
 } from "../stores/playlists";
@@ -35,19 +32,6 @@ const countOf = (p: Playlist): number => p.entries.length;
 const missingOf = (p: Playlist): number =>
   resolvePlaylist(p).filter((r: ResolvedEntry) => !r.track).length;
 
-function menu(e: MouseEvent, p: Playlist): void {
-  openCtx(e, [
-    { label: "打开播放列表", icon: "playlist", action: () => openPlaylist(p.id) },
-    { label: "导出为 TMCL", icon: "export", action: () => void exportPlaylist(p) },
-    { label: "重命名", icon: "edit", action: () => askRenamePlaylist(p) },
-    {
-      label: "删除播放列表",
-      icon: "delete",
-      danger: true,
-      action: () => void deletePlaylist(p),
-    },
-  ]);
-}
 </script>
 
 <template>
@@ -76,7 +60,7 @@ function menu(e: MouseEvent, p: Playlist): void {
           class="card"
           :class="{ active: ui.view === 'playlist' && ui.playlistId === p.id }"
           @click="openPlaylist(p.id)"
-          @contextmenu="menu($event, p)"
+          @contextmenu="openPlaylistMenu($event, p)"
         >
           <div class="cover-collage">
             <template v-if="collage(p).length">

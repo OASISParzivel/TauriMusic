@@ -1,7 +1,8 @@
 import { computed, reactive } from "vue";
 import { api, type Playlist, type PlaylistEntry, type Track } from "../api";
 import { lib, flashStatus } from "./library";
-import { ui } from "./ui";
+import { openPlaylist, ui } from "./ui";
+import { openCtx } from "./context";
 
 /** 路径规范化:统一分隔符与大小写(mac/导入包的 '/' 与 Windows 的 '\' 混用) */
 const normPath = (p: string): string => p.replace(/\//g, "\\").toLowerCase();
@@ -171,6 +172,21 @@ export async function deletePlaylist(p: Playlist): Promise<void> {
     return;
   }
   if (ui.view === "playlist" && ui.playlistId === p.id) ui.view = "playlists";
+}
+
+/** 歌单右键菜单(侧栏歌单项与列表页卡片共用) */
+export function openPlaylistMenu(e: MouseEvent, p: Playlist): void {
+  openCtx(e, [
+    { label: "打开播放列表", icon: "playlist", action: () => openPlaylist(p.id) },
+    { label: "导出为 TMCL", icon: "export", action: () => void exportPlaylist(p) },
+    { label: "重命名", icon: "edit", action: () => askRenamePlaylist(p) },
+    {
+      label: "删除播放列表",
+      icon: "delete",
+      danger: true,
+      action: () => void deletePlaylist(p),
+    },
+  ]);
 }
 
 /** 导出为 .tmcl(7z:音乐源文件 + 歌词 + 封面 + playlist.json) */

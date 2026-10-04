@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { ui, go, openPlaylist, type ViewName } from "../stores/ui";
 import { lib } from "../stores/library";
-import { askCreatePlaylist } from "../stores/playlists";
+import { askCreatePlaylist, openPlaylistMenu } from "../stores/playlists";
 
 const navItems = [
   { name: "home", label: "最近添加", icon: "clock" },
@@ -107,6 +107,7 @@ const statusText = computed(() =>
         :class="{ active: ui.view === 'playlist' && ui.playlistId === p.id }"
         :title="p.name"
         @click="openPlaylist(p.id)"
+        @contextmenu="openPlaylistMenu($event, p)"
       >
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
           <path d="M4 6.5h11M4 12h11M4 17.5h7" />
