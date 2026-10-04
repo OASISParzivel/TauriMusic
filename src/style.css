@@ -354,6 +354,24 @@ html.glass .sidebar {
   border-radius: 0 0 20px 0;
 }
 
+/* 正在播放胶囊:凹陷的 LCD 质感(凸起的白块在玻璃铬底上很突兀) */
+html.glass .topbar .np-pill {
+  background: rgba(0, 0, 0, 0.13);
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+html.glass .topbar .np-pill:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.19);
+}
+html.dark.glass .topbar .np-pill {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+html.dark.glass .topbar .np-pill:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.38);
+}
+
 html.glass .sidebar,
 html.glass .topbar {
   position: relative;
