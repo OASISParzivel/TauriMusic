@@ -2,8 +2,7 @@
 import { ref } from "vue";
 import Modal from "./Modal.vue";
 import { acceptWelcome } from "../stores/ui";
-
-const AUTHOR_MAIL = "O_Art3mis@163.com";
+import { AUTHOR_MAIL } from "../constants";
 
 /** 两步引导:1 使用声明 → 2 感谢信 */
 const step = ref<1 | 2>(1);

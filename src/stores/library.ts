@@ -405,6 +405,9 @@ export async function removeFolder(path: string): Promise<void> {
 
 const keyOf = (t: Track) => `${t.albumArtist || t.artist}\u{1}${t.album}`;
 
+/** 曲目所属专辑的唯一键(albumArtist + album) */
+export const trackAlbumKey = keyOf;
+
 export const albums = computed<Album[]>(() => {
   const map = new Map<string, Album>();
   for (const t of lib.tracks) {

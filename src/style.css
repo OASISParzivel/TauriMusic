@@ -2,6 +2,8 @@
 :root {
   --accent: #fa233b;
   --accent-hover: #d81e32;
+  --danger: #e81123;
+  --danger-bg: rgba(232, 17, 35, 0.12);
 
   --bg: #ffffff;
   --bg-2: #f6f6f8;
@@ -29,6 +31,8 @@
 html.dark {
   --accent: #fc3c44;
   --accent-hover: #e02833;
+  --danger: #ff5a5a;
+  --danger-bg: rgba(232, 17, 35, 0.22);
 
   --bg: #141416;
   --bg-2: #0f0f10;

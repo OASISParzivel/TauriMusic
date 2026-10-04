@@ -109,7 +109,7 @@ html.dark.glass .menu {
   color: var(--text-2);
 }
 .item.danger {
-  color: #e81123;
+  color: var(--danger);
 }
 .item.danger svg {
   color: inherit;

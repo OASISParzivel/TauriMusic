@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { albumByKey, enrichAlbumNetease, deleteTracks, exportTracksTmc } from "../stores/library";
+import { useConfirmableAction } from "../composables/useConfirmableAction";
 import { playTracks, player } from "../stores/player";
 import { ui, go } from "../stores/ui";
 import TrackList from "../components/TrackList.vue";
@@ -45,22 +46,17 @@ function onExportAlbum(): void {
 }
 
 /** 删除整张专辑(两段确认,确认后回到专辑列表) */
-const confirmingDelete = ref(false);
-let confirmTimer = 0;
+const { confirmingId: confirmingDelete, confirm: confirmDelete } = useConfirmableAction();
+
 function onDeleteAlbum(): void {
   if (!album.value) return;
-  if (!confirmingDelete.value) {
-    confirmingDelete.value = true;
-    window.clearTimeout(confirmTimer);
-    confirmTimer = window.setTimeout(() => (confirmingDelete.value = false), 3000);
-    return;
-  }
-  confirmingDelete.value = false;
   const ids = album.value.tracks.map((t) => t.id);
   // 删除失败(文件被占用)时留在原页,状态条已提示
-  void deleteTracks(ids).then((ok) => {
-    if (ok) go("albums");
-  });
+  if (confirmDelete("__album__")) {
+    void deleteTracks(ids).then((ok) => {
+      if (ok) go("albums");
+    });
+  }
 }
 </script>
 
@@ -243,7 +239,7 @@ h1 {
   filter: brightness(1.06);
 }
 .ghost-pill.danger.confirm {
-  color: #e81123;
-  border: 1px solid #e81123;
+  color: var(--danger);
+  border: 1px solid var(--danger);
 }
 </style>

@@ -2,10 +2,10 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import Modal from "./Modal.vue";
+import { AUTHOR_MAIL } from "../constants";
 import { ui } from "../stores/ui";
 import { api, type ResourceUsage } from "../api";
 
-const AUTHOR_MAIL = "O_Art3mis@163.com";
 
 const version = ref("0.1.0");
 const copied = ref(false);

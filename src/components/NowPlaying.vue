@@ -2,7 +2,8 @@
 import { computed, ref, watch } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api, type LyricLine } from "../api";
-import { player, current, toggle, next, prev, seek, fmtTime, cycleMode, MODE_LABEL } from "../stores/player";
+import { player, current, toggle, next, prev, seek, fmtTime } from "../stores/player";
+import ModeIcon from "./ModeIcon.vue";
 import { ui } from "../stores/ui";
 
 const coverUrl = computed(() => (current.value?.cover ? convertFileSrc(current.value.cover) : null));
@@ -134,34 +135,7 @@ function onSeek(e: Event): void {
 
     <div class="bottom">
       <div class="controls">
-        <button class="t-btn" :class="{ on: player.mode !== 'seq' }" :title="MODE_LABEL[player.mode]" @click="cycleMode()">
-          <svg v-if="player.mode === 'seq'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 12h11" />
-            <path d="m12 8 4 4-4 4" />
-            <path d="M20 5v14" />
-          </svg>
-          <svg v-else-if="player.mode === 'loop'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m17 2.5 3.5 3.5-3.5 3.5" />
-            <path d="M3.5 11.5v-1a4.5 4.5 0 0 1 4.5-4.5h12" />
-            <path d="m7 21.5-3.5-3.5L7 14.5" />
-            <path d="M20.5 12.5v1a4.5 4.5 0 0 1-4.5 4.5H4" />
-          </svg>
-          <svg v-else-if="player.mode === 'one'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m17 2.5 3.5 3.5-3.5 3.5" />
-            <path d="M3.5 11.5v-1a4.5 4.5 0 0 1 4.5-4.5h12" />
-            <path d="m7 21.5-3.5-3.5L7 14.5" />
-            <path d="M20.5 12.5v1a4.5 4.5 0 0 1-4.5 4.5H4" />
-            <path d="M10.5 9.5 12 8.6V15" stroke-width="2" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M2.5 18h1.6c1.3 0 2.6-.6 3.4-1.7l6-8.6c.8-1.1 2.1-1.7 3.4-1.7h3.1" />
-            <path d="m18.5 2.5 3 3.5-3 3.5" />
-            <path d="M2.5 6h1.6c1.5 0 2.9.9 3.7 2.2" />
-            <path d="M20 18h-4.1c-1.3 0-2.5-.7-3.3-1.8l-.6-.8" />
-            <path d="m18.5 14.5 3 3.5-3 3.5" />
-          </svg>
-          <span v-if="player.mode === 'one'" class="badge">1</span>
-        </button>
+        <ModeIcon class="t-btn" />
         <button class="t-btn" title="上一曲" @click="prev()">
           <svg viewBox="0 0 24 24">
             <path d="M7 5.8v12.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />

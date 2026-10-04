@@ -728,6 +728,18 @@ pub fn netease_client() -> reqwest::blocking::Client {
                 .user_agent(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 )
+                .default_headers(
+                    reqwest::header::HeaderMap::from_iter([
+                        (
+                            reqwest::header::REFERER,
+                            "https://music.163.com".parse().unwrap(),
+                        ),
+                        (
+                            reqwest::header::COOKIE,
+                            "os=pc; appver=2.9.7".parse().unwrap(),
+                        ),
+                    ]),
+                )
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new())
@@ -771,8 +783,6 @@ fn netease_search(
 ) -> Option<serde_json::Value> {
     let resp = client
         .post("https://music.163.com/api/search/get/web")
-        .header("Referer", "https://music.163.com")
-        .header("Cookie", "os=pc; appver=2.9.7")
         .form(&[
             ("s", keyword),
             ("type", &search_type.to_string()),
@@ -861,12 +871,7 @@ pub fn netease_lyric(
         .or_else(|| songs.first())?;
     let id = pick["id"].as_i64()?;
     let url = format!("https://music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=-1");
-    let resp = client
-        .get(&url)
-        .header("Referer", "https://music.163.com")
-        .header("Cookie", "os=pc; appver=2.9.7")
-        .send()
-        .ok()?;
+    let resp = client.get(&url).send().ok()?;
     if !resp.status().is_success() {
         return None;
     }

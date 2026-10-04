@@ -1,5 +1,6 @@
 import { ref, reactive, watchEffect } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { StorageKeys, storageGetString, storageRemove, storageSet } from "./storage";
 
 export type ViewName = "home" | "albums" | "album" | "artists" | "songs" | "search";
 /** 皮肤模式:跟随系统 / 浅色 / 黑色 */
@@ -47,12 +48,12 @@ const systemDark = ref(false);
 
 /** 首次启动:未同意过使用声明时弹出 */
 export function initWelcome(): void {
-  ui.welcomeOpen = localStorage.getItem("tm-welcome") !== "1";
+  ui.welcomeOpen = storageGetString(StorageKeys.welcome, "") !== "1";
 }
 
 /** 同意使用声明并记住,不再弹出 */
 export function acceptWelcome(): void {
-  localStorage.setItem("tm-welcome", "1");
+  storageSet(StorageKeys.welcome, "1");
   ui.welcomeOpen = false;
 }
 
@@ -79,7 +80,7 @@ export function openArtist(name: string): void {
 
 export function setThemeMode(mode: ThemeMode): void {
   ui.themeMode = mode;
-  localStorage.setItem("tm-theme", mode);
+  storageSet(StorageKeys.theme, mode);
 }
 
 let themeInited = false;
@@ -87,14 +88,14 @@ let themeInited = false;
 export function initTheme(): void {
   if (themeInited) return; // HMR/重复调用防抖,避免监听与 effect 叠加
   themeInited = true;
-  const saved = localStorage.getItem("tm-theme");
+  const saved = storageGetString(StorageKeys.theme, "");
   if (saved === "light" || saved === "dark" || saved === "system") {
     ui.themeMode = saved;
   } else {
     // 迁移旧版 tm-dark 记忆
-    const legacy = localStorage.getItem("tm-dark");
-    ui.themeMode = legacy == null ? "system" : legacy === "1" ? "dark" : "light";
-    localStorage.removeItem("tm-dark");
+    const legacy = storageGetString("tm-dark", "");
+    ui.themeMode = legacy === "" ? "system" : legacy === "1" ? "dark" : "light";
+    storageRemove("tm-dark");
   }
 
   systemDark.value = prefersDark();
@@ -120,7 +121,7 @@ let glassInited = false;
 export function initGlass(): void {
   if (glassInited) return;
   glassInited = true;
-  ui.glass = localStorage.getItem("tm-glass") !== "0"; // 默认开启
+  ui.glass = storageGetString(StorageKeys.glass, "1") !== "0"; // 默认开启
   watchEffect(() => {
     document.documentElement.classList.toggle("glass", ui.glass);
   });
@@ -128,5 +129,5 @@ export function initGlass(): void {
 
 export function toggleGlass(): void {
   ui.glass = !ui.glass;
-  localStorage.setItem("tm-glass", ui.glass ? "1" : "0");
+  storageSet(StorageKeys.glass, ui.glass ? "1" : "0");
 }

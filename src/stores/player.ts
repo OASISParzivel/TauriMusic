@@ -1,6 +1,7 @@
 import { computed, shallowReactive } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
+import { StorageKeys, storageGetString, storageSet } from "./storage";
 
 /** 播放模式:互斥单选,一键循环切换 */
 export type PlayMode = "seq" | "loop" | "one" | "shuffle";
@@ -29,11 +30,14 @@ export const player = shallowReactive<PlayerState>({
   playing: false,
   position: 0,
   duration: 0,
-  volume: Number(localStorage.getItem("tm-vol") ?? "1"),
+  volume: Number(storageGetString(StorageKeys.volume, "1")),
   mode: "seq",
 });
 
 export const current = computed<Track | null>(() => player.queue[player.index] ?? null);
+
+/** 进度超过该秒数时按"上一曲"先回到开头 */
+const PREV_RESTART_THRESHOLD = 3;
 
 let audio: HTMLAudioElement | null = null;
 let raf = 0;
@@ -191,7 +195,7 @@ export function prev(): void {
   const n = player.queue.length;
   if (n === 0) return;
   const a = ensureAudio();
-  if (a.currentTime > 3) {
+  if (a.currentTime > PREV_RESTART_THRESHOLD) {
     a.currentTime = 0;
     return;
   }
@@ -224,7 +228,7 @@ export function setVolume(v: number): void {
   player.volume = clamped;
   // 拖动过程每帧都会调用,落盘做防抖
   window.clearTimeout(volSaveTimer);
-  volSaveTimer = window.setTimeout(() => localStorage.setItem("tm-vol", String(clamped)), 300);
+  volSaveTimer = window.setTimeout(() => storageSet(StorageKeys.volume, String(clamped)), 300);
   if (audio) audio.volume = clamped;
 }
 

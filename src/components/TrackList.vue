@@ -4,7 +4,8 @@ import { RecycleScroller } from "vue-virtual-scroller";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
 import { current, fmtTime, playTracks, playTrack } from "../stores/player";
-import { exportTrackTmc, exportTracksTmc, deleteTracks } from "../stores/library";
+import { exportTrackTmc, exportTracksTmc, deleteTracks, trackAlbumKey } from "../stores/library";
+import { useConfirmableAction } from "../composables/useConfirmableAction";
 import { openAlbum, openArtist } from "../stores/ui";
 import { openCtx } from "../stores/context";
 
@@ -32,18 +33,10 @@ function exportOne(t: Track): void {
 }
 
 /** 删除采用两段确认:第一次点进入确认态,3 秒内再点执行 */
-const confirmingId = ref<string | null>(null);
-let confirmTimer = 0;
+const { confirmingId, confirm } = useConfirmableAction();
 
 function onDelete(t: Track): void {
-  if (confirmingId.value !== t.id) {
-    confirmingId.value = t.id;
-    window.clearTimeout(confirmTimer);
-    confirmTimer = window.setTimeout(() => (confirmingId.value = null), 3000);
-    return;
-  }
-  confirmingId.value = null;
-  void deleteTracks([t.id]);
+  if (confirm(t.id)) void deleteTracks([t.id]);
 }
 
 /** 多选:Ctrl/Shift 点击进入选择;Shift 为范围选 */
@@ -103,18 +96,12 @@ function exportSelected(): void {
   clearSelection();
 }
 
-const confirmingBatchDelete = ref(false);
-let batchConfirmTimer = 0;
+const { confirmingId: confirmingBatchDelete, confirm: confirmBatch } = useConfirmableAction();
 
 function deleteSelected(): void {
-  if (!confirmingBatchDelete.value) {
-    confirmingBatchDelete.value = true;
-    window.clearTimeout(batchConfirmTimer);
-    batchConfirmTimer = window.setTimeout(() => (confirmingBatchDelete.value = false), 3000);
-    return;
+  if (confirmBatch("__batch__")) {
+    void deleteTracks([...selected.value]).then(clearSelection);
   }
-  confirmingBatchDelete.value = false;
-  void deleteTracks([...selected.value]).then(clearSelection);
 }
 
 /** 歌曲右键菜单:有选中时批量操作,否则单首 */
@@ -135,7 +122,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
   }
   openCtx(e, [
     { label: "播放", icon: "play", action: () => play(t) },
-    { label: "查看专辑", icon: "album", action: () => openAlbum(`${t.albumArtist || t.artist}\u{1}${t.album}`) },
+    { label: "查看专辑", icon: "album", action: () => openAlbum(trackAlbumKey(t)) },
     { label: "查看艺人", icon: "artist", action: () => openArtist(t.artist) },
     { label: "导出为 TMC 音乐包", icon: "export", action: () => exportOne(t) },
     { label: "删除(移入回收站)", icon: "delete", danger: true, action: () => void deleteTracks([t.id]) },
@@ -445,12 +432,12 @@ function rowMenu(e: MouseEvent, t: Track): void {
 }
 .del.confirm {
   opacity: 1;
-  background: rgba(232, 17, 35, 0.12);
-  color: #e81123;
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 .del.confirm:hover {
-  background: rgba(232, 17, 35, 0.2);
-  color: #e81123;
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .dur {
@@ -533,8 +520,8 @@ function rowMenu(e: MouseEvent, t: Track): void {
   background: var(--accent-hover);
 }
 .sel-btn.danger.confirm {
-  color: #e81123;
-  border: 1px solid #e81123;
+  color: var(--danger);
+  border: 1px solid var(--danger);
 }
 .sel-btn.ghost {
   color: var(--text-2);

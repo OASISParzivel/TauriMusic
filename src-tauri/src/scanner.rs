@@ -11,6 +11,19 @@ use crate::model::{ScanReport, Track};
 use crate::{sanitize_name, AppState, IMPORT_DIR_NAME, LIBRARY_FILE};
 
 pub const EXTENSIONS: &[&str] = &["mp3", "m4a", "flac", "ogg", "oga", "opus", "wav"];
+/// 封面图片扩展名(目录封面回退与内嵌封面落盘共用)
+pub const COVER_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp"];
+
+/// 解析年份字符串:取前 4 位数字,限定合理区间
+pub fn parse_year(s: &str) -> Option<i32> {
+    s.chars()
+        .take(4)
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse::<i32>()
+        .ok()
+        .filter(|&y| (1000..=3000).contains(&y))
+}
 /// 目录内兜底封面文件名(不含扩展名)
 const COVER_NAMES: &[&str] = &["cover", "folder", "front", "album", "albumart"];
 /// 曲库格式版本:复用旧记录的条件之一。版本不一致时强制全量重扫(如封面改存缩略图)
@@ -261,15 +274,7 @@ fn parse_track(
     let mut album_artist = get(&ItemKey::AlbumArtist);
     let mut year = get(&ItemKey::Year)
         .or_else(|| get(&ItemKey::RecordingDate))
-        .and_then(|y| {
-            y.chars()
-                .take(4)
-                .filter(|c| c.is_ascii_digit())
-                .collect::<String>()
-                .parse::<i32>()
-                .ok()
-        })
-        .filter(|&y| (1000..=3000).contains(&y));
+        .and_then(|y| parse_year(&y));
     let mut track_no = get(&ItemKey::TrackNumber).and_then(parse_slashed_number);
     let disc_no = get(&ItemKey::DiscNumber).and_then(parse_slashed_number);
     let mut genre = get(&ItemKey::Genre);
@@ -291,16 +296,7 @@ fn parse_track(
             album = album.or_else(|| mget("album"));
             album_artist = album_artist.or_else(|| mget("albumArtist"));
             if year.is_none() {
-                year = mget("year")
-                    .and_then(|y| {
-                        y.chars()
-                            .take(4)
-                            .filter(|c| c.is_ascii_digit())
-                            .collect::<String>()
-                            .parse::<i32>()
-                            .ok()
-                    })
-                    .filter(|&y| (1000..=3000).contains(&y));
+                year = mget("year").and_then(|y| parse_year(&y));
             }
             if track_no.is_none() {
                 track_no = mget("trackNo").and_then(parse_slashed_number);
@@ -348,7 +344,7 @@ fn parse_track(
         }
         if found.is_none() {
             // 曲目专属旁路封面(多专辑混居目录用):{stem}.cover.jpg 优先于通用 cover.*
-            'stem_cover: for ext in ["jpg", "jpeg", "png", "webp"] {
+            'stem_cover: for ext in COVER_EXTS {
                 let p = parent.join(format!("{stem}.cover.{ext}"));
                 if p.is_file() {
                     found = Some(p.to_string_lossy().to_string());
@@ -358,7 +354,7 @@ fn parse_track(
         }
         if found.is_none() {
             'outer: for name in COVER_NAMES {
-                for ext in ["jpg", "jpeg", "png", "webp"] {
+                for ext in COVER_EXTS {
                     let p = parent.join(format!("{name}.{ext}"));
                     if p.is_file() {
                         found = Some(p.to_string_lossy().to_string());
@@ -437,11 +433,11 @@ fn sidecar_mtime(path: &Path, prev_cover: Option<&str>) -> f64 {
     };
     let mut candidates: Vec<PathBuf> = Vec::new();
     for name in COVER_NAMES {
-        for ext in ["jpg", "jpeg", "png", "webp"] {
+        for ext in COVER_EXTS {
             candidates.push(parent.join(format!("{name}.{ext}")));
         }
     }
-    for ext in ["jpg", "jpeg", "png", "webp"] {
+    for ext in COVER_EXTS {
         candidates.push(parent.join(format!("{stem}.cover.{ext}")));
     }
     candidates.push(parent.join(format!("{stem}.lrc")));
@@ -553,7 +549,7 @@ fn organize_top_level(import_dir: &Path, files: &mut Vec<PathBuf>) {
         if lrc.is_file() {
             let _ = fs::rename(&lrc, parent.join(format!("{stem}.lrc")));
         }
-        for e in ["jpg", "jpeg", "png", "webp"] {
+        for e in COVER_EXTS {
             let c = import_dir.join(format!("{stem}.cover.{e}"));
             if c.is_file() {
                 let _ = fs::rename(&c, parent.join(format!("{stem}.cover.{e}")));
