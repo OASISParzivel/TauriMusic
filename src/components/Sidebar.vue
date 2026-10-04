@@ -197,7 +197,7 @@ const statusText = computed(() =>
   font-weight: 700;
   color: var(--text-3);
   padding: 0 10px 6px;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.8px;
   flex: none;
 }
 
@@ -240,11 +240,8 @@ nav {
 .nav-item.active .ico {
   color: var(--text);
 }
-/* 玻璃皮肤下恢复红色图标点缀 */
-html.glass .nav-item .ico {
-  color: var(--accent);
-}
-html.glass .nav-item.active {
+/* 玻璃皮肤下激活项红字红图标(Apple Music 式),非激活保持灰 */
+html.glass .nav-item.active .ico {
   color: var(--accent);
 }
 
@@ -331,6 +328,11 @@ html.glass .nav-item.active {
   flex-direction: column;
   gap: 2px;
   flex: none;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+:global(html.dark) .actions {
+  border-top-color: rgba(255, 255, 255, 0.08);
 }
 .action {
   display: flex;
