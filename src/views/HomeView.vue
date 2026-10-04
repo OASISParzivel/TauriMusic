@@ -4,7 +4,13 @@ import { albums, lib, addFolder, removeFolder, rescan, albumRecency, openImportD
 import { openAlbum } from "../stores/ui";
 import AlbumCard from "../components/AlbumCard.vue";
 
-const recent = computed(() => [...albums.value].sort((a, b) => albumRecency(b) - albumRecency(a) || a.artist.localeCompare(b.artist, "zh")));
+// 排序前预计算每张专辑的入库时间,避免比较器内 O(曲目数) 的重复计算
+const recent = computed(() => {
+  const recency = new Map(albums.value.map((a) => [a.key, albumRecency(a)]));
+  return [...albums.value].sort(
+    (a, b) => (recency.get(b.key) ?? 0) - (recency.get(a.key) ?? 0) || a.artist.localeCompare(b.artist, "zh"),
+  );
+});
 
 function shortPath(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { RecycleScroller } from "vue-virtual-scroller";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
 import { current, fmtTime, playTracks, playTrack } from "../stores/player";
@@ -15,7 +16,12 @@ const props = defineProps<{
   showCover?: boolean;
   /** 显示专辑列 */
   showAlbum?: boolean;
+  /** 虚拟滚动:大列表(整库/专辑)开启,父级需提供有界高度 */
+  virtual?: boolean;
 }>();
+
+/** 虚拟模式固定行高:有封面 52px,无封面 47px(行内行高在 .virtual 中固定) */
+const rowHeight = computed(() => (props.showCover ? 52 : 47));
 
 function play(t: Track): void {
   playTrack(t, props.tracks);
@@ -138,10 +144,64 @@ function rowMenu(e: MouseEvent, t: Track): void {
 </script>
 
 <template>
-  <div class="tl">
+  <!-- 虚拟模式:仅渲染视口内的行(万首歌曲 DOM 从数万节点降到 ~20 行) -->
+  <RecycleScroller
+    v-if="virtual"
+    class="tl virtual"
+    :items="tracks"
+    :item-size="rowHeight"
+    key-field="id"
+    :buffer="300"
+  >
+    <template #default="{ item: t, index: i, active }">
+      <div
+        class="row"
+        :style="{ height: rowHeight + 'px' }"
+        :class="{ current: t.id === current?.id, picked: selected.has(t.id), hovered: active }"
+        @click="rowClick($event, t, i)"
+        @contextmenu="rowMenu($event, t)"
+      >
+        <span v-if="showIndex" class="idx">
+          <span class="num">{{ t.trackNo ?? i + 1 }}</span>
+          <svg class="play-ico" viewBox="0 0 24 24"><path d="M8.6 6.5v11L18 12z" fill="currentColor" /></svg>
+        </span>
+        <span v-if="showCover" class="cov">
+          <img v-if="t.cover" :src="convertFileSrc(t.cover)" loading="lazy" alt="" />
+          <span v-else class="ph">♪</span>
+          <svg class="play-ico" viewBox="0 0 24 24"><path d="M8.6 6.5v11L18 12z" fill="currentColor" /></svg>
+        </span>
+        <span class="main">
+          <span class="t" :title="t.title">{{ t.title }}</span>
+          <span class="a" :title="t.artist">{{ t.artist }}</span>
+        </span>
+        <span v-if="showAlbum" class="al" :title="t.album">{{ t.album }}</span>
+        <span v-if="t.hasLyrics" class="badge">词</span>
+        <button class="exp" title="导出为 TMC 音乐包" @click.stop="exportOne(t)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 13.5V4M8.5 7.5 12 4l3.5 3.5" />
+            <path d="M5 15v2.6c0 .77.63 1.4 1.4 1.4h11.2c.77 0 1.4-.63 1.4-1.4V15" />
+          </svg>
+        </button>
+        <button
+          class="del"
+          :class="{ confirm: confirmingId === t.id }"
+          :title="confirmingId === t.id ? '再次点击确认删除(移入回收站)' : '删除这首歌(移入回收站)'"
+          @click.stop="onDelete(t)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 7h15M9.5 7V5.2c0-.66.54-1.2 1.2-1.2h2.6c.66 0 1.2.54 1.2 1.2V7M6.5 7l.8 11.3c.06.77.7 1.2 1.4 1.2h6.6c.7 0 1.34-.43 1.4-1.2L17.5 7" />
+            <path d="M10 11v5M14 11v5" />
+          </svg>
+        </button>
+        <span class="dur">{{ fmtTime(t.duration) }}</span>
+      </div>
+    </template>
+  </RecycleScroller>
+
+  <div v-else class="tl">
     <div
       v-for="(t, i) in tracks"
-      :key="t.id + '-' + i"
+      :key="t.id"
       class="row"
       :class="{ current: t.id === current?.id, picked: selected.has(t.id) }"
       @click="rowClick($event, t, i)"
@@ -181,10 +241,11 @@ function rowMenu(e: MouseEvent, t: Track): void {
       </button>
       <span class="dur">{{ fmtTime(t.duration) }}</span>
     </div>
+  </div>
 
-    <!-- 多选操作条 -->
-    <Transition name="bar">
-      <div v-if="selected.size > 0" class="sel-bar">
+  <!-- 多选操作条(虚拟模式下为固定浮层) -->
+  <Transition name="bar">
+    <div v-if="selected.size > 0" class="sel-bar" :class="{ fixed: virtual }">
         <span class="sel-count">已选 {{ selected.size }} 首</span>
         <div class="sel-actions">
           <button class="sel-btn primary" @click="playSelected">播放</button>
@@ -195,8 +256,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
           <button class="sel-btn ghost" @click="clearSelection">取消</button>
         </div>
       </div>
-    </Transition>
-  </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -214,9 +274,16 @@ function rowMenu(e: MouseEvent, t: Track): void {
   cursor: pointer;
   min-width: 0;
   transition: background 0.25s var(--ease-out-soft);
-  /* 大曲库性能:视口外的行跳过布局与绘制 */
+  /* 大曲库性能:视口外的行跳过布局与绘制(非虚拟模式生效;虚拟模式自带回收) */
   content-visibility: auto;
   contain-intrinsic-size: auto 54px;
+}
+/* 虚拟模式:固定行内行高,保证 item-size 与实际渲染一致 */
+.virtual .t {
+  line-height: 18px;
+}
+.virtual .a {
+  line-height: 16px;
 }
 .row:hover {
   background: var(--hover);
@@ -408,6 +475,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
   position: sticky;
   bottom: 12px;
   margin-top: 14px;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -418,7 +486,16 @@ function rowMenu(e: MouseEvent, t: Track): void {
   border: 1px solid var(--hairline);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
   backdrop-filter: blur(24px) saturate(1.6);
-  z-index: 5;
+}
+.sel-bar.fixed {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(560px, 86%);
+  margin-top: 0;
+  z-index: 50;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.28);
 }
 .sel-count {
   font-size: 13px;

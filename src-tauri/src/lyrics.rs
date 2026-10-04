@@ -4,7 +4,7 @@ use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use serde::Serialize;
 
-use crate::model::{Library, Track};
+use crate::model::Track;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricLine {
@@ -49,12 +49,6 @@ pub fn load_for_track(track: &Track) -> Option<LyricsPayload> {
     } else {
         Some(payload)
     }
-}
-
-/// 从曲库中查找并加载歌词(tauri command 内部使用)
-pub fn find_in_library(id: &str, lib: &Library) -> Option<LyricsPayload> {
-    let track = lib.tracks.iter().find(|t| t.id == id)?;
-    load_for_track(track)
 }
 
 /// 解析 LRC 文本。带时间戳的行进入 synced,其余非空行进入 plain。

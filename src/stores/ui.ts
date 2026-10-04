@@ -82,7 +82,11 @@ export function setThemeMode(mode: ThemeMode): void {
   localStorage.setItem("tm-theme", mode);
 }
 
+let themeInited = false;
+
 export function initTheme(): void {
+  if (themeInited) return; // HMR/重复调用防抖,避免监听与 effect 叠加
+  themeInited = true;
   const saved = localStorage.getItem("tm-theme");
   if (saved === "light" || saved === "dark" || saved === "system") {
     ui.themeMode = saved;
@@ -111,7 +115,11 @@ export function initTheme(): void {
 }
 
 /** 液态玻璃:封面驱动的氛围背景 + 悬浮玻璃卡片(折射应用自身内容) */
+let glassInited = false;
+
 export function initGlass(): void {
+  if (glassInited) return;
+  glassInited = true;
   ui.glass = localStorage.getItem("tm-glass") !== "0"; // 默认开启
   watchEffect(() => {
     document.documentElement.classList.toggle("glass", ui.glass);

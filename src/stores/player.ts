@@ -1,4 +1,4 @@
-import { computed, reactive } from "vue";
+import { computed, shallowReactive } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Track } from "../api";
 
@@ -23,7 +23,7 @@ interface PlayerState {
   mode: PlayMode;
 }
 
-export const player = reactive<PlayerState>({
+export const player = shallowReactive<PlayerState>({
   queue: [],
   index: -1,
   playing: false,
@@ -47,7 +47,9 @@ function ensureAudio(): HTMLAudioElement {
 
   const tick = (): void => {
     if (audio && !audio.paused) {
-      player.position = audio.currentTime;
+      // ~5Hz 更新足够 UI 使用,避免每帧 60 次触发全链路响应式更新
+      const t = audio.currentTime;
+      if (Math.abs(t - player.position) > 0.2) player.position = t;
       raf = requestAnimationFrame(tick);
     }
   };
@@ -215,10 +217,14 @@ export function seek(t: number): void {
   }
 }
 
+let volSaveTimer = 0;
+
 export function setVolume(v: number): void {
   const clamped = Math.min(1, Math.max(0, v));
   player.volume = clamped;
-  localStorage.setItem("tm-vol", String(clamped));
+  // 拖动过程每帧都会调用,落盘做防抖
+  window.clearTimeout(volSaveTimer);
+  volSaveTimer = window.setTimeout(() => localStorage.setItem("tm-vol", String(clamped)), 300);
   if (audio) audio.volume = clamped;
 }
 

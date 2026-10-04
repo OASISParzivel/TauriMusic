@@ -22,6 +22,21 @@ import LibGate from "../components/LibGate.vue";
 </template>
 
 <style scoped>
+/* 虚拟滚动:视图变为有界容器,列表自身滚动 */
+.view {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.view :deep(.tl.virtual) {
+  flex: 1;
+  min-height: 0;
+}
+.view :deep(.view-head) {
+  flex: none;
+  margin-bottom: 14px;
+}
+
 .right {
   display: flex;
   align-items: center;

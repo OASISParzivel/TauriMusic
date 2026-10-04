@@ -54,10 +54,18 @@ watch(
     const lines = synced.value;
     if (!lines || lines.length === 0) return;
     const t = pos * 1000 + 200;
+    // 二分查找当前行(线性扫描在长歌词下每秒多次全量遍历)
+    let lo = 0;
+    let hi = lines.length - 1;
     let idx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].timeMs <= t) idx = i;
-      else break;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (lines[mid].timeMs <= t) {
+        idx = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
     if (idx !== activeIdx.value) {
       activeIdx.value = idx;

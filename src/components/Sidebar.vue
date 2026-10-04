@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { ui, go, type ViewName } from "../stores/ui";
 import { lib } from "../stores/library";
 
@@ -18,15 +18,30 @@ function isActive(name: string): boolean {
 
 /** 搜索前的视图:清空搜索时回到原处而不是固定落回最近添加 */
 let viewBeforeSearch: ViewName = "home";
+/** 输入框本地状态:180ms 防抖后再更新全局 ui.search,大曲库下避免每键击全库过滤 */
+const searchInput = ref(ui.search);
+let searchTimer = 0;
 
-function onSearchInput(): void {
-  if (ui.search.trim()) {
-    if (ui.view !== "search") viewBeforeSearch = ui.view;
-    ui.view = "search";
-  } else if (ui.view === "search") {
-    ui.view = viewBeforeSearch;
-  }
-}
+watch(searchInput, (v) => {
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    if (v.trim()) {
+      if (ui.view !== "search") viewBeforeSearch = ui.view;
+      ui.view = "search";
+    } else if (ui.view === "search") {
+      ui.view = viewBeforeSearch;
+    }
+    ui.search = v;
+  }, 180);
+});
+
+// 打开专辑/艺人等入口会清空 ui.search,同步回输入框
+watch(
+  () => ui.search,
+  (v) => {
+    if (v === "" && searchInput.value !== "") searchInput.value = "";
+  },
+);
 
 const statusText = computed(() =>
   lib.scanning
@@ -42,7 +57,7 @@ const statusText = computed(() =>
         <circle cx="11" cy="11" r="6.5" />
         <path d="m16.2 16.2 4.3 4.3" />
       </svg>
-      <input v-model="ui.search" type="text" placeholder="搜索" spellcheck="false" @input="onSearchInput" />
+      <input v-model="searchInput" type="text" placeholder="搜索" spellcheck="false" />
     </div>
 
     <div class="section-label">资料库</div>

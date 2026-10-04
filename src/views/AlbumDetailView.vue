@@ -112,7 +112,7 @@ function onDeleteAlbum(): void {
       </div>
     </header>
 
-    <TrackList :tracks="album.tracks" show-index />
+    <TrackList :tracks="album.tracks" show-index virtual />
   </div>
   <div v-else class="view">
     <div class="empty">
@@ -123,6 +123,21 @@ function onDeleteAlbum(): void {
 </template>
 
 <style scoped>
+/* 虚拟滚动:视图变为有界容器,专辑头部固定,曲目列表自身滚动 */
+.view {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.view :deep(.detail-head) {
+  flex: none;
+  margin-bottom: 14px;
+}
+.view :deep(.tl.virtual) {
+  flex: 1;
+  min-height: 0;
+}
+
 .back {
   display: inline-flex;
   align-items: center;

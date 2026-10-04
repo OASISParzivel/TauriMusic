@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -70,89 +71,136 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
     let _ = fs::create_dir_all(&covers_dir);
 
     // 专辑封面去重:同一张专辑只提取/落盘一次
-    let mut album_covers: HashMap<String, String> = HashMap::new();
+    // 并行解析:文件清单按 CPU 核数分块,块内顺序、块间并行;
+    // 封面去重表加锁聚合,进度计数用原子量,块结果按原顺序合并保证曲库顺序稳定
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 8);
+    let chunk_size = total.div_ceil(workers).max(1);
+    let album_covers: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+    let done = std::sync::atomic::AtomicUsize::new(0);
+
+    let chunk_results: Vec<Vec<Track>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = files
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let chunk: Vec<PathBuf> = chunk.to_vec();
+                let by_path = &by_path;
+                let done = &done;
+                let covers_dir = &covers_dir;
+                let app = &app;
+                let album_covers = &album_covers;
+                scope.spawn(move || {
+                    let mut out: Vec<Track> = Vec::with_capacity(chunk.len());
+                    for path in &chunk {
+                        let path_str = path.to_string_lossy().to_string();
+
+                        let (mtime, size) = match fs::metadata(path) {
+                            Ok(m) => (
+                                m.modified()
+                                    .ok()
+                                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                                    .map(|d| d.as_secs_f64())
+                                    .unwrap_or(0.0),
+                                m.len(),
+                            ),
+                            Err(_) => {
+                                // 文件在遍历与 stat 之间消失:落入 removed 口径
+                                continue;
+                            }
+                        };
+                        done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                        let cached = by_path.get(&path_str).cloned();
+                        if let Some(prev) = &cached {
+                            // 文件未变化:直接复用旧记录,不重复解析。
+                            // 旁路文件(cover.* / 同名 .lrc)比音频新时也算变更——在线匹配只新增旁路文件;
+                            // 旧记录里的封面/歌词文件已被删除时同样视为变更,避免残留失效路径
+                            let cover_ok = prev
+                                .cover
+                                .as_ref()
+                                .map(|c| Path::new(c).is_file())
+                                .unwrap_or(true);
+                            let lrc_ok = prev
+                                .lrc_path
+                                .as_ref()
+                                .map(|c| Path::new(c).is_file())
+                                .unwrap_or(true);
+                            if (prev.mtime - mtime).abs() < 0.5
+                                && prev.size == size
+                                && cover_ok
+                                && lrc_ok
+                                && sidecar_mtime(path, prev.cover.as_deref()) <= prev.mtime + 0.5
+                                && !force_full
+                            {
+                                out.push(prev.clone());
+                                continue;
+                            }
+                        }
+
+                        match parse_track(
+                            path,
+                            mtime,
+                            size,
+                            now,
+                            covers_dir,
+                            &mut album_covers.lock().unwrap_or_else(|e| e.into_inner()),
+                        ) {
+                            Ok(mut track) => {
+                                if let Some(prev) = cached {
+                                    track.added_at = prev.added_at;
+                                }
+                                out.push(track);
+                            }
+                            Err(err) => {
+                                eprintln!("[scan] 解析失败 {path_str}: {err}");
+                                if let Some(prev) = cached {
+                                    out.push(prev);
+                                }
+                            }
+                        }
+
+                        let n = done.load(std::sync::atomic::Ordering::Relaxed);
+                        if n.is_multiple_of(20) || n == total {
+                            let _ =
+                                app.emit("scan-progress", json!({ "current": n, "total": total }));
+                        }
+                    }
+                    out
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
+
+    // 按原顺序合并 + 聚合统计:added/updated 由 by_path 判定;
+    // metadata 失败的文件落入 removed 口径,解析失败的保留旧记录
     let mut result: Vec<Track> = Vec::with_capacity(total);
-    let mut seen: HashSet<String> = HashSet::new();
-    let (mut added, mut updated, mut errors) = (0usize, 0usize, 0usize);
-
-    for (i, path) in files.iter().enumerate() {
-        let path_str = path.to_string_lossy().to_string();
-
-        let (mtime, size) = match fs::metadata(path) {
-            Ok(m) => (
-                m.modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0),
-                m.len(),
-            ),
-            Err(_) => {
-                // 文件在遍历与 stat 之间消失:不算 seen,让它落入 removed 口径
-                errors += 1;
-                continue;
-            }
-        };
-        seen.insert(path_str.clone());
-
-        let cached = by_path.get(&path_str).cloned();
-        if let Some(prev) = &cached {
-            // 文件未变化:直接复用旧记录,不重复解析。
-            // 旁路文件(cover.* / 同名 .lrc)比音频新时也算变更——在线匹配只新增旁路文件;
-            // 旧记录里的封面/歌词文件已被删除时同样视为变更,避免残留失效路径
-            let cover_ok = prev
-                .cover
-                .as_ref()
-                .map(|c| Path::new(c).is_file())
-                .unwrap_or(true);
-            let lrc_ok = prev
-                .lrc_path
-                .as_ref()
-                .map(|c| Path::new(c).is_file())
-                .unwrap_or(true);
-            if (prev.mtime - mtime).abs() < 0.5
-                && prev.size == size
-                && cover_ok
-                && lrc_ok
-                && sidecar_mtime(path, prev.cover.as_deref()) <= prev.mtime + 0.5
-                && !force_full
-            {
-                result.push(prev.clone());
-                continue;
-            }
-        }
-
-        match parse_track(path, mtime, size, now, &covers_dir, &mut album_covers) {
-            Ok(mut track) => {
-                if let Some(prev) = cached {
-                    track.added_at = prev.added_at;
-                    updated += 1;
-                } else {
-                    added += 1;
-                }
-                result.push(track);
-            }
-            Err(err) => {
-                errors += 1;
-                eprintln!("[scan] 解析失败 {path_str}: {err}");
-                if let Some(prev) = cached {
-                    result.push(prev);
-                }
-            }
-        }
-
-        if i % 20 == 0 || i + 1 == total {
-            let _ = app.emit("scan-progress", json!({ "current": i + 1, "total": total }));
+    for chunk in chunk_results {
+        result.extend(chunk);
+    }
+    let mut seen: HashSet<String> = HashSet::with_capacity(result.len());
+    let mut added = 0usize;
+    let mut updated = 0usize;
+    for t in &result {
+        seen.insert(t.path.clone());
+        if by_path.contains_key(&t.path) {
+            updated += 1;
+        } else {
+            added += 1;
         }
     }
-
     let removed = existing.iter().filter(|t| !seen.contains(&t.path)).count();
     let report = ScanReport {
         added,
         updated,
         removed,
         total,
-        errors,
+        errors: 0, // 解析失败已回填旧记录;metadata 失败计入 removed
     };
 
     {

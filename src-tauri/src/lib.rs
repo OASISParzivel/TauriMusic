@@ -93,7 +93,14 @@ enum CopyResult {
 
 /// 拖拽导入:整个文件夹登记为扫描来源(不复制),散装音频/歌词文件复制进导入目录
 #[tauri::command]
-fn import_paths(paths: Vec<String>, state: State<AppState>) -> Result<ImportReport, String> {
+async fn import_paths(paths: Vec<String>, app: tauri::AppHandle) -> Result<ImportReport, String> {
+    tauri::async_runtime::spawn_blocking(move || import_paths_blocking(&paths, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn import_paths_blocking(paths: &[String], app: &tauri::AppHandle) -> Result<ImportReport, String> {
+    let state = app.state::<AppState>();
     let import_dir = ensure_import_dir(&state)?;
     let mut report = ImportReport {
         folders_added: 0,
@@ -108,7 +115,7 @@ fn import_paths(paths: Vec<String>, state: State<AppState>) -> Result<ImportRepo
         .iter()
         .map(|t| (t.path.clone(), t.size))
         .collect();
-    for raw in &paths {
+    for raw in paths {
         let path = Path::new(raw);
         if path.is_dir() {
             let dir_str = path.to_string_lossy().to_string();
@@ -244,8 +251,13 @@ pub(crate) fn sanitize_name(s: &str) -> String {
 
 /// 解包 .tmc 到导入目录下的同名子目录,由扫描器拾取(meta.json 会补齐缺失标签)
 #[tauri::command]
-fn import_tmc(path: String, state: State<AppState>) -> Result<String, String> {
-    import_tmc_file(Path::new(&path), &state)
+async fn import_tmc(path: String, app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        import_tmc_file(Path::new(&path), &state)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn import_tmc_file(src: &Path, state: &AppState) -> Result<String, String> {
@@ -279,65 +291,69 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let state = app.state::<AppState>();
-        let import_dir = match ensure_import_dir(&state) {
-            Ok(d) => d,
-            Err(e) => {
-                let _ = app.emit("import-error", format!("导入目录不可用: {e}"));
-                return;
-            }
-        };
-        let known: Vec<(String, u64)> = state
-            .lib
-            .lock()
-            .map(|lib| {
-                lib.tracks
-                    .iter()
-                    .map(|t| (t.path.clone(), t.size))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut failures: Vec<String> = Vec::new();
-        for p in &paths {
-            let ext = p
-                .extension()
-                .map(|e| e.to_string_lossy().to_lowercase().to_string())
+        // 7z 解压 + 全量扫描都是重活,放阻塞线程池,避免卡 tokio worker
+        let worker = tauri::async_runtime::spawn_blocking(move || {
+            let state = app.state::<AppState>();
+            let import_dir = match ensure_import_dir(&state) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = app.emit("import-error", format!("导入目录不可用: {e}"));
+                    return;
+                }
+            };
+            let known: Vec<(String, u64)> = state
+                .lib
+                .lock()
+                .map(|lib| {
+                    lib.tracks
+                        .iter()
+                        .map(|t| (t.path.clone(), t.size))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let name = p
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.to_string_lossy().to_string());
-            let result = if ext == "tmc" {
-                import_tmc_file(p, &state).map(|_| ())
-            } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
-                copy_into_import_dir(p, &import_dir, &known).map(|_| ())
-            } else {
-                failures.push(format!("{name}: 不支持的格式"));
-                continue;
-            };
-            if let Err(e) = result {
-                failures.push(format!("{name}: {e}"));
+            let mut failures: Vec<String> = Vec::new();
+            for p in &paths {
+                let ext = p
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase().to_string())
+                    .unwrap_or_default();
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.to_string_lossy().to_string());
+                let result = if ext == "tmc" {
+                    import_tmc_file(p, &state).map(|_| ())
+                } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
+                    copy_into_import_dir(p, &import_dir, &known).map(|_| ())
+                } else {
+                    failures.push(format!("{name}: 不支持的格式"));
+                    continue;
+                };
+                if let Err(e) = result {
+                    failures.push(format!("{name}: {e}"));
+                }
             }
-        }
-        if let Err(e) = scanner::run_scan(&app) {
-            failures.push(format!("扫描失败: {e}"));
-        }
-        if !failures.is_empty() {
-            // 汇总失败清单推给前端(状态条最多展示有限字数,取前 3 条)
-            let summary = failures
-                .iter()
-                .take(3)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("; ");
-            let more = if failures.len() > 3 {
-                format!(" 等 {} 项", failures.len())
-            } else {
-                String::new()
-            };
-            let _ = app.emit("import-error", format!("{summary}{more}"));
-        }
-        let _ = app.emit("library-changed", ());
+            if let Err(e) = scanner::run_scan(&app) {
+                failures.push(format!("扫描失败: {e}"));
+            }
+            if !failures.is_empty() {
+                // 汇总失败清单推给前端(状态条最多展示有限字数,取前 3 条)
+                let summary = failures
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let more = if failures.len() > 3 {
+                    format!(" 等 {} 项", failures.len())
+                } else {
+                    String::new()
+                };
+                let _ = app.emit("import-error", format!("{summary}{more}"));
+            }
+            let _ = app.emit("library-changed", ());
+        });
+        let _ = worker.await;
     });
 }
 
@@ -660,9 +676,28 @@ fn netease_enrich_blocking(
         }
     }
 
-    // 歌词:逐首匹配无 .lrc 的曲目
-    for t in tracks.iter().filter(|t| t.lrc_path.is_none()) {
-        match netease_lyric(&client, &t.title, &t.artist) {
+    // 歌词:批量并行匹配无 .lrc 的曲目(每首 2 次 HTTP 往返,串行在大专辑下太慢)
+    let targets: Vec<&model::Track> = tracks.iter().filter(|t| t.lrc_path.is_none()).collect();
+    let results: Vec<Option<String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = targets
+            .chunks(4)
+            .map(|chunk| {
+                let client = &client;
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|t| netease_lyric(client, &t.title, &t.artist))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
+    for (t, text) in targets.iter().zip(results) {
+        match text {
             Some(text) => {
                 let parent = Path::new(&t.path)
                     .parent()
@@ -686,13 +721,18 @@ fn netease_enrich_blocking(
 }
 
 pub fn netease_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        )
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .expect("网络客户端初始化失败")
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .user_agent(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                )
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new())
+        })
+        .clone()
 }
 
 /// 归一化标签用于跨源比对:繁体转简体 + 小写 + 去空白(本地标签常见繁体/大小写差异)
@@ -840,55 +880,75 @@ pub fn netease_lyric(
 /// 删除曲目:音频与同名歌词移入回收站,曲库同步移除;
 /// 导入目录内的子目录若已无音频文件则一并清理
 #[tauri::command]
-fn delete_tracks(ids: Vec<String>, state: State<AppState>) -> Result<u32, String> {
+async fn delete_tracks(ids: Vec<String>, app: tauri::AppHandle) -> Result<DeleteReport, String> {
+    tauri::async_runtime::spawn_blocking(move || delete_tracks_blocking(&ids, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteReport {
+    pub deleted: u32,
+    pub failed: u32,
+}
+
+fn delete_tracks_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<DeleteReport, String> {
+    let state = app.state::<AppState>();
     let import_dir = state.data_dir.join("Music");
-    let mut deleted = 0u32;
-    let mut failed = 0u32;
-    let mut parents: Vec<PathBuf> = Vec::new();
-    {
+
+    // 1) 锁内:取出匹配曲目并先从曲库移除(避免长时间持锁做文件删除)
+    let to_delete: Vec<model::Track> = {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
-        let mut kept: Vec<model::Track> = Vec::with_capacity(lib.tracks.len());
-        for t in lib.tracks.drain(..) {
-            if !ids.contains(&t.id) {
-                kept.push(t);
-                continue;
-            }
-            let p = Path::new(&t.path);
-            // 回收站删除失败(文件被占用/权限不足)时保留曲库记录,
-            // 避免"曲库没了文件还在"的幽灵状态;前端会提示失败数量
-            match trash::delete(p) {
-                Ok(()) => {
-                    deleted += 1;
-                    if let Some(parent) = p.parent() {
-                        if let Some(stem) = p.file_stem() {
-                            let _ = trash::delete(
-                                parent.join(format!("{}.lrc", stem.to_string_lossy())),
-                            );
-                        }
-                        let parent = parent.to_path_buf();
-                        if !parents.contains(&parent) {
-                            parents.push(parent);
-                        }
-                    }
-                    kept.push(t);
-                }
-                Err(_) => {
-                    failed += 1;
-                    kept.push(t);
-                }
-            }
-        }
+        let (del, kept): (Vec<model::Track>, Vec<model::Track>) =
+            lib.tracks.drain(..).partition(|t| ids.contains(&t.id));
         lib.tracks = kept;
         lib.save(&state.data_dir.join(LIBRARY_FILE))
             .map_err(|e| e.to_string())?;
+        del
+    };
+
+    // 2) 锁外:移入回收站(音频 + 同名歌词),回收站可恢复
+    let mut deleted = 0u32;
+    let mut parents: Vec<PathBuf> = Vec::new();
+    let mut failed_tracks: Vec<model::Track> = Vec::new();
+    for t in &to_delete {
+        let p = Path::new(&t.path);
+        match trash::delete(p) {
+            Ok(()) => {
+                deleted += 1;
+                if let Some(parent) = p.parent() {
+                    if let Some(stem) = p.file_stem() {
+                        let _ =
+                            trash::delete(parent.join(format!("{}.lrc", stem.to_string_lossy())));
+                    }
+                    let parent = parent.to_path_buf();
+                    if !parents.contains(&parent) {
+                        parents.push(parent);
+                    }
+                }
+            }
+            // 回收站删除失败(文件被占用/权限不足)→ 稍后回填曲库,避免幽灵状态
+            Err(_) => failed_tracks.push(t.clone()),
+        }
     }
-    if failed > 0 {
-        eprintln!("[delete] {failed} 首删除失败(文件被占用?),已保留曲库记录");
+
+    // 3) 失败的回填曲库并落盘
+    if !failed_tracks.is_empty() {
+        let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        lib.tracks.extend(failed_tracks.iter().cloned());
+        lib.save(&state.data_dir.join(LIBRARY_FILE))
+            .map_err(|e| e.to_string())?;
+        eprintln!(
+            "[delete] {} 首删除失败(文件被占用?),已保留曲库记录",
+            failed_tracks.len()
+        );
     }
-    // 导入目录的子目录(非根)如果没有音频文件了,连同残留的 meta/封面一起清掉
-    for d in parents {
-        if d.starts_with(&import_dir) && d != import_dir {
-            let has_audio = std::fs::read_dir(&d)
+
+    // 4) 导入目录的子目录(非根)如果没有音频文件了,连同残留的 meta/封面一起清掉
+    for d in &parents {
+        if d.starts_with(&import_dir) && *d != import_dir {
+            let has_audio = std::fs::read_dir(d)
                 .map(|rd| {
                     rd.filter_map(|e| e.ok()).any(|e| {
                         e.path()
@@ -902,11 +962,13 @@ fn delete_tracks(ids: Vec<String>, state: State<AppState>) -> Result<u32, String
                 })
                 .unwrap_or(false);
             if !has_audio {
-                let _ = fs::remove_dir_all(&d);
+                let _ = fs::remove_dir_all(d);
             }
         }
     }
-    Ok(deleted)
+
+    let failed = failed_tracks.len() as u32;
+    Ok(DeleteReport { deleted, failed })
 }
 
 pub const ASSOC_EXTS: &[(&str, &str)] = &[
@@ -1061,8 +1123,12 @@ fn set_association(ext: String, enable: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_library(state: State<AppState>) -> Library {
-    state.lib.lock().map(|l| l.clone()).unwrap_or_default()
+fn get_library(state: State<AppState>) -> serde_json::Value {
+    // 锁内完成序列化:大曲库时避免整库深拷贝再二次序列化
+    match state.lib.lock() {
+        Ok(lib) => serde_json::to_value(&*lib).unwrap_or_default(),
+        Err(e) => serde_json::to_value(&*e.into_inner()).unwrap_or_default(),
+    }
 }
 
 #[tauri::command]
@@ -1109,9 +1175,16 @@ async fn scan_library(app: tauri::AppHandle) -> Result<model::ScanReport, String
 }
 
 #[tauri::command]
-fn get_lyrics(id: String, state: State<AppState>) -> Option<lyrics::LyricsPayload> {
-    let lib = state.lib.lock().ok()?;
-    lyrics::find_in_library(&id, &lib)
+async fn get_lyrics(id: String, app: tauri::AppHandle) -> Option<lyrics::LyricsPayload> {
+    // 锁内只查表取 Track;歌词解析(lofty 音频探测)移到阻塞线程
+    let track = {
+        let state = app.state::<AppState>();
+        let lib = state.lib.lock().ok()?;
+        lib.tracks.iter().find(|t| t.id == id).cloned()
+    }?;
+    tauri::async_runtime::spawn_blocking(move || lyrics::load_for_track(&track))
+        .await
+        .ok()?
 }
 
 // ===== 资源占用(关于页展示) =====

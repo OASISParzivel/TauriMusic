@@ -1,4 +1,4 @@
-import { computed, reactive } from "vue";
+import { computed, shallowReactive } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, type Track } from "../api";
@@ -31,7 +31,7 @@ interface LibState {
   matching: boolean;
 }
 
-export const lib = reactive<LibState>({
+export const lib = shallowReactive<LibState>({
   tracks: [],
   folders: [],
   loaded: false,
@@ -46,25 +46,12 @@ export const lib = reactive<LibState>({
 
 let importStatusTimer = 0;
 
-export async function initLibrary(): Promise<void> {
-  try {
-    const data = await api.getLibrary();
-    lib.tracks = data.tracks;
-    lib.folders = data.folders;
-    lib.loadError = null;
-  } catch (err) {
-    console.error("读取曲库失败", err);
-    lib.loadError = String(err);
-  } finally {
-    lib.loaded = true;
-  }
+let listenersInited = false;
 
-  try {
-    lib.importDir = await api.getImportDir();
-  } catch (err) {
-    console.error("获取导入目录失败", err);
-  }
-
+/** 注册 Tauri 事件监听(仅一次;HMR/重复调用不会叠加) */
+function initLibraryListeners(): void {
+  if (listenersInited) return;
+  listenersInited = true;
   void listen<{ current: number; total: number }>("scan-progress", (e) => {
     lib.scanCurrent = e.payload.current;
     lib.scanTotal = e.payload.total;
@@ -87,6 +74,27 @@ export async function initLibrary(): Promise<void> {
   void listen<string>("import-error", (e) => {
     flashStatus(`导入失败: ${e.payload}`);
   });
+}
+
+export async function initLibrary(): Promise<void> {
+  initLibraryListeners();
+  try {
+    const data = await api.getLibrary();
+    lib.tracks = data.tracks;
+    lib.folders = data.folders;
+    lib.loadError = null;
+  } catch (err) {
+    console.error("读取曲库失败", err);
+    lib.loadError = String(err);
+  } finally {
+    lib.loaded = true;
+  }
+
+  try {
+    lib.importDir = await api.getImportDir();
+  } catch (err) {
+    console.error("获取导入目录失败", err);
+  }
 
   // 读库失败时提供重试;成功才走启动扫描
   if (lib.loadError) return;
