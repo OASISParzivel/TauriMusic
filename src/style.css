@@ -476,24 +476,6 @@ html.dark.glass .nav-item.active {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
-/* 艺人页吸顶表头:通栏磨砂横条(Apple Music 式),方角贴边,底部细线;
-   横向渗出 .view 内边距与艺人列表间距,左缘抵住列表分隔线 */
-html.glass .detail .view-head {
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(30px) saturate(1.7);
-  border-radius: 0;
-  border: none;
-  border-bottom: 1px solid var(--hairline);
-  padding: 12px 36px 12px 54px;
-  margin: 0 -36px 14px -34px;
-  align-items: baseline;
-}
-
-html.dark.glass .detail .view-head {
-  background: rgba(24, 24, 32, 0.72);
-  border-bottom-color: rgba(255, 255, 255, 0.1);
-}
-
 html.glass .cover {
   background: rgba(0, 0, 0, 0.05);
 }

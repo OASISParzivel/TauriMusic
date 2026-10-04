@@ -122,11 +122,7 @@ const artistSongs = computed(() => {
   padding-bottom: 40px;
 }
 .detail .view-head {
-  position: sticky;
-  top: 0;
-  background: var(--bg);
-  padding: 2px 0 8px;
-  z-index: 2;
+  margin-bottom: 14px;
 }
 
 .grid {
