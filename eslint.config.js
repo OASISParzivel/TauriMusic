@@ -4,7 +4,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "src-tauri/**", "node_modules/**", "scripts/**"] },
+  { ignores: ["dist/**", "src-tauri/**", "node_modules/**", "scripts/**", "TauriMusic-promo/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...pluginVue.configs["flat/recommended"],

@@ -54,6 +54,15 @@ const style = computed(() => ({ left: `${ctx.x}px`, top: `${ctx.y}px` }));
             <path d="M12 13.5V4M8.5 7.5 12 4l3.5 3.5" />
             <path d="M5 15v2.6c0 .77.63 1.4 1.4 1.4h11.2c.77 0 1.4-.63 1.4-1.4V15" />
           </svg>
+          <svg v-else-if="item.icon === 'playlist'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+            <path d="M4 6.5h11M4 12h11M4 17.5h7" />
+            <circle cx="18.5" cy="15.5" r="2.2" />
+            <path d="M20.7 15.5V9l-3.4.9" />
+          </svg>
+          <svg v-else-if="item.icon === 'edit'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 5.5l4 4L8 20H4v-4z" />
+            <path d="m12.5 7.5 4 4" />
+          </svg>
           <svg v-else-if="item.icon === 'delete'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4.5 7h15M9.5 7V5.2c0-.66.54-1.2 1.2-1.2h2.6c.66 0 1.2.54 1.2 1.2V7M6.5 7l.8 11.3c.06.77.7 1.2 1.4 1.2h6.6c.7 0 1.34-.43 1.4-1.2L17.5 7" />
             <path d="M10 11v5M14 11v5" />

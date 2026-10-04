@@ -32,6 +32,30 @@ pub struct Track {
     pub size: u64,
 }
 
+/// 播放列表条目:曲库曲目引用(id 优先,路径兜底)+ 元数据快照(曲目失效时仍可展示)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlaylistEntry {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_artist: String,
+    pub duration: f64,
+}
+
+/// 用户播放列表
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    /// 创建时间(unix 秒)
+    pub created_at: f64,
+    pub entries: Vec<PlaylistEntry>,
+}
+
 /// 整个曲库,持久化为 app_data/library.json
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -39,6 +63,7 @@ pub struct Library {
     pub version: u32,
     pub folders: Vec<String>,
     pub tracks: Vec<Track>,
+    pub playlists: Vec<Playlist>,
 }
 
 impl Library {
@@ -129,6 +154,18 @@ mod tests {
         let lib = Library {
             version: 2,
             folders: vec!["F:\\music".into()],
+            playlists: vec![Playlist {
+                id: "pl1".into(),
+                name: "我的歌单".into(),
+                created_at: 1759500000.0,
+                entries: vec![PlaylistEntry {
+                    id: "abc123".into(),
+                    path: "F:\\music\\晴天.mp3".into(),
+                    title: "晴天".into(),
+                    artist: "周杰伦".into(),
+                    ..Default::default()
+                }],
+            }],
             tracks: vec![Track {
                 id: "abc123".into(),
                 title: "晴天".into(),
@@ -150,6 +187,8 @@ mod tests {
         assert_eq!(back.tracks[0].title, "晴天");
         assert_eq!(back.tracks[0].track_no, Some(3));
         assert_eq!(back.tracks[0].mtime, 1759000000.5);
+        assert_eq!(back.playlists[0].name, "我的歌单");
+        assert_eq!(back.playlists[0].entries[0].title, "晴天");
         fs::remove_file(&path).ok();
         fs::remove_file(backup_path(&path)).ok();
     }
@@ -171,6 +210,7 @@ mod tests {
         let lib = Library {
             version: 2,
             folders: vec!["F:\\music".into()],
+            playlists: vec![],
             tracks: vec![Track {
                 id: "x".into(),
                 title: "测试曲目".into(),
@@ -201,6 +241,7 @@ mod tests {
         let first = Library {
             version: 1,
             folders: vec![],
+            playlists: vec![],
             tracks: vec![Track {
                 id: "a".into(),
                 title: "A".into(),
@@ -211,6 +252,7 @@ mod tests {
         let second = Library {
             version: 2,
             folders: vec![],
+            playlists: vec![],
             tracks: vec![Track {
                 id: "b".into(),
                 title: "B".into(),

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ui, go, type ViewName } from "../stores/ui";
+import { ui, go, openPlaylist, type ViewName } from "../stores/ui";
 import { lib } from "../stores/library";
+import { askCreatePlaylist } from "../stores/playlists";
 
 const navItems = [
   { name: "home", label: "最近添加", icon: "clock" },
@@ -89,6 +90,39 @@ const statusText = computed(() =>
         <span>{{ item.label }}</span>
       </button>
     </nav>
+
+    <div class="section-label pl-head">
+      播放列表
+      <button class="pl-add" title="新建播放列表" @click="askCreatePlaylist">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M12 5.5v13M5.5 12h13" />
+        </svg>
+      </button>
+    </div>
+    <div class="pl-list">
+      <button
+        v-for="p in lib.playlists"
+        :key="p.id"
+        class="nav-item pl-item"
+        :class="{ active: ui.view === 'playlist' && ui.playlistId === p.id }"
+        :title="p.name"
+        @click="openPlaylist(p.id)"
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <path d="M4 6.5h11M4 12h11M4 17.5h7" />
+          <circle cx="18.5" cy="15.5" r="2.2" />
+          <path d="M20.7 15.5V9l-3.4.9" />
+        </svg>
+        <span class="pl-text">{{ p.name }}</span>
+      </button>
+      <button
+        class="nav-item pl-item pl-all"
+        :class="{ active: ui.view === 'playlists' }"
+        @click="go('playlists')"
+      >
+        <span class="pl-text muted">全部播放列表</span>
+      </button>
+    </div>
 
     <div class="spacer" />
 
@@ -211,6 +245,73 @@ html.glass .nav-item .ico {
 }
 html.glass .nav-item.active {
   color: var(--accent);
+}
+
+.pl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 6px;
+  margin-top: 12px;
+}
+.pl-add {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.pl-add:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.pl-add svg {
+  width: 13px;
+  height: 13px;
+}
+.pl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+  max-height: 30vh;
+  overflow-y: auto;
+  /* macOS 叠加式滚动条:平时隐藏 */
+}
+.pl-list::-webkit-scrollbar {
+  width: 8px;
+}
+.pl-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.pl-list:hover::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  background-clip: content-box;
+}
+.pl-item .ico {
+  color: var(--text-3);
+}
+.pl-item.active .ico {
+  color: var(--text);
+}
+.pl-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-text.muted {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.pl-all {
+  margin-top: 2px;
 }
 
 .spacer {

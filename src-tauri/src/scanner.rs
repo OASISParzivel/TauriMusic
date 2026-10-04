@@ -453,7 +453,7 @@ fn sidecar_mtime(path: &Path, prev_cover: Option<&str>) -> f64 {
         .fold(0.0, f64::max)
 }
 
-fn hash_str(s: &str) -> u64 {
+pub(crate) fn hash_str(s: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()

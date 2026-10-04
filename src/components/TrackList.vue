@@ -6,6 +6,7 @@ import type { Track } from "../api";
 import { current, fmtTime, playTracks, playTrack } from "../stores/player";
 import { exportTrackTmc, exportTracksTmc, deleteTracks, trackAlbumKey } from "../stores/library";
 import { useConfirmableAction } from "../composables/useConfirmableAction";
+import { openPlaylistPicker } from "../stores/playlists";
 import { openAlbum, openArtist } from "../stores/ui";
 import { openCtx } from "../stores/context";
 
@@ -110,6 +111,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
     const n = selected.value.size;
     openCtx(e, [
       { label: `播放选中的 ${n} 首`, icon: "play", action: playSelected },
+      { label: `加入歌单(${n} 首)`, icon: "playlist", action: () => openPlaylistPicker([...selected.value]) },
       { label: `导出选中为 TMC 音乐包(${n})`, icon: "export", action: exportSelected },
       {
         label: `删除选中的 ${n} 首(移入回收站)`,
@@ -124,6 +126,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
     { label: "播放", icon: "play", action: () => play(t) },
     { label: "查看专辑", icon: "album", action: () => openAlbum(trackAlbumKey(t)) },
     { label: "查看艺人", icon: "artist", action: () => openArtist(t.artist) },
+    { label: "添加到播放列表…", icon: "playlist", action: () => openPlaylistPicker([t.id]) },
     { label: "导出为 TMC 音乐包", icon: "export", action: () => exportOne(t) },
     { label: "删除(移入回收站)", icon: "delete", danger: true, action: () => void deleteTracks([t.id]) },
   ]);
@@ -236,6 +239,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
         <span class="sel-count">已选 {{ selected.size }} 首</span>
         <div class="sel-actions">
           <button class="sel-btn primary" @click="playSelected">播放</button>
+          <button class="sel-btn" @click="openPlaylistPicker([...selected])">加入歌单</button>
           <button class="sel-btn" @click="exportSelected">导出 TMC</button>
           <button class="sel-btn danger" :class="{ confirm: confirmingBatchDelete }" @click="deleteSelected">
             {{ confirmingBatchDelete ? "确认删除?" : "删除" }}

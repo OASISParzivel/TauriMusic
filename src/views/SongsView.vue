@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { allSongs, lib, enrichAllNetease } from "../stores/library";
+import { playTracks, setMode } from "../stores/player";
 import TrackList from "../components/TrackList.vue";
 import LibGate from "../components/LibGate.vue";
+
+/** 全库随机播放:队列 = 全部歌曲,模式切到随机 */
+function shuffleAll(): void {
+  const songs = allSongs.value;
+  if (songs.length === 0) return;
+  setMode("shuffle");
+  playTracks(songs, Math.floor(Math.random() * songs.length));
+}
 </script>
 
 <template>
@@ -11,12 +20,15 @@ import LibGate from "../components/LibGate.vue";
         <h1>歌曲</h1>
         <div class="right">
           <span class="count">{{ allSongs.length }} 首</span>
+          <button class="match-btn ghost" :disabled="allSongs.length === 0" @click="shuffleAll">
+            随机播放全部
+          </button>
           <button class="match-btn" :disabled="lib.matching" @click="enrichAllNetease">
             {{ lib.matching ? "匹配中…" : "全部在线匹配" }}
           </button>
         </div>
       </header>
-      <TrackList :tracks="allSongs" show-album show-cover />
+      <TrackList :tracks="allSongs" show-album show-cover virtual />
     </LibGate>
   </div>
 </template>
@@ -40,7 +52,7 @@ import LibGate from "../components/LibGate.vue";
 .right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 .match-btn {
   font-size: 12.5px;
@@ -57,6 +69,13 @@ import LibGate from "../components/LibGate.vue";
 .match-btn:active:not(:disabled) {
   transform: scale(0.97);
   transition-duration: 0.09s;
+}
+.match-btn.ghost {
+  color: var(--text);
+  background: var(--pill-bg);
+}
+.match-btn.ghost:hover:not(:disabled) {
+  background: var(--hover);
 }
 .match-btn:disabled {
   opacity: 0.55;

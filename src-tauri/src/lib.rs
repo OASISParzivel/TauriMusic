@@ -323,6 +323,8 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
                     .unwrap_or_else(|| p.to_string_lossy().to_string());
                 let result = if ext == "tmc" {
                     import_tmc_file(p, &state).map(|_| ())
+                } else if ext == "tmcl" {
+                    import_playlist_tmcl_blocking(&p.to_string_lossy(), &app).map(|_| ())
                 } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
                     copy_into_import_dir(p, &import_dir, &known).map(|_| ())
                 } else {
@@ -503,8 +505,8 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
 #[tauri::command]
 async fn pick_tmc_file() -> Option<String> {
     rfd::AsyncFileDialog::new()
-        .set_title("选择 TMC 音乐包")
-        .add_filter("TMC 音乐包 (*.tmc)", &["tmc"])
+        .set_title("选择音乐包(TMC / TMCL)")
+        .add_filter("音乐包 (*.tmc, *.tmcl)", &["tmc", "tmcl"])
         .pick_file()
         .await
         .map(|f| f.path().to_string_lossy().to_string())
@@ -976,8 +978,537 @@ fn delete_tracks_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<Dele
     Ok(DeleteReport { deleted, failed })
 }
 
+// ===== 播放列表(用户歌单:创建/改名/增删曲目/排序/导出导入) =====
+
+fn now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+fn new_playlist_id(name: &str) -> String {
+    format!(
+        "{:016x}",
+        scanner::hash_str(&format!("{name}:{}", now_secs()))
+    )
+}
+
+/// 同名时自动追加序号:"歌单" → "歌单 (2)"
+fn unique_playlist_name(existing: &[model::Playlist], base: &str) -> String {
+    if !existing.iter().any(|p| p.name == base) {
+        return base.to_string();
+    }
+    for i in 2..1000 {
+        let cand = format!("{base} ({i})");
+        if !existing.iter().any(|p| p.name == cand) {
+            return cand;
+        }
+    }
+    base.to_string()
+}
+
+/// 把曲目解析为播放列表条目(元数据快照,id 供后续回查)
+fn entry_of(t: &model::Track) -> model::PlaylistEntry {
+    model::PlaylistEntry {
+        id: t.id.clone(),
+        path: t.path.clone(),
+        title: t.title.clone(),
+        artist: t.artist.clone(),
+        album: t.album.clone(),
+        album_artist: t.album_artist.clone(),
+        duration: t.duration,
+    }
+}
+
+#[tauri::command]
+fn create_playlist(name: String, state: State<AppState>) -> Result<Vec<model::Playlist>, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("播放列表名称不能为空".into());
+    }
+    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    if lib.playlists.iter().any(|p| p.name == name) {
+        return Err("已存在同名播放列表".into());
+    }
+    lib.playlists.push(model::Playlist {
+        id: new_playlist_id(&name),
+        name,
+        created_at: now_secs(),
+        entries: Vec::new(),
+    });
+    lib.save(&state.data_dir.join(LIBRARY_FILE))
+        .map_err(|e| e.to_string())?;
+    Ok(lib.playlists.clone())
+}
+
+#[tauri::command]
+fn rename_playlist(
+    id: String,
+    name: String,
+    state: State<AppState>,
+) -> Result<Vec<model::Playlist>, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("播放列表名称不能为空".into());
+    }
+    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    if lib.playlists.iter().any(|p| p.id != id && p.name == name) {
+        return Err("已存在同名播放列表".into());
+    }
+    let pl = lib
+        .playlists
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or("播放列表不存在")?;
+    pl.name = name;
+    lib.save(&state.data_dir.join(LIBRARY_FILE))
+        .map_err(|e| e.to_string())?;
+    Ok(lib.playlists.clone())
+}
+
+#[tauri::command]
+fn delete_playlist(id: String, state: State<AppState>) -> Result<Vec<model::Playlist>, String> {
+    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    lib.playlists.retain(|p| p.id != id);
+    lib.save(&state.data_dir.join(LIBRARY_FILE))
+        .map_err(|e| e.to_string())?;
+    Ok(lib.playlists.clone())
+}
+
+/// 把曲目加入播放列表(按路径去重,返回新增数量与最新列表)
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddToPlaylistReport {
+    added: u32,
+    skipped: u32,
+    playlists: Vec<model::Playlist>,
+}
+
+#[tauri::command]
+fn add_tracks_to_playlist(
+    playlist_id: String,
+    track_ids: Vec<String>,
+    state: State<AppState>,
+) -> Result<AddToPlaylistReport, String> {
+    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    let mut resolved: Vec<model::PlaylistEntry> = Vec::new();
+    for id in &track_ids {
+        if let Some(t) = lib.tracks.iter().find(|t| &t.id == id) {
+            resolved.push(entry_of(t));
+        }
+    }
+    if resolved.is_empty() {
+        return Err("未找到可加入的曲目".into());
+    }
+    let mut added = 0u32;
+    let mut skipped = 0u32;
+    {
+        let pl = lib
+            .playlists
+            .iter_mut()
+            .find(|p| p.id == playlist_id)
+            .ok_or("播放列表不存在")?;
+        for e in resolved {
+            if pl.entries.iter().any(|x| x.path == e.path) {
+                skipped += 1;
+            } else {
+                pl.entries.push(e);
+                added += 1;
+            }
+        }
+    }
+    lib.save(&state.data_dir.join(LIBRARY_FILE))
+        .map_err(|e| e.to_string())?;
+    Ok(AddToPlaylistReport {
+        added,
+        skipped,
+        playlists: lib.playlists.clone(),
+    })
+}
+
+#[tauri::command]
+fn remove_playlist_entry(
+    playlist_id: String,
+    index: usize,
+    state: State<AppState>,
+) -> Result<Vec<model::Playlist>, String> {
+    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    let pl = lib
+        .playlists
+        .iter_mut()
+        .find(|p| p.id == playlist_id)
+        .ok_or("播放列表不存在")?;
+    if index < pl.entries.len() {
+        pl.entries.remove(index);
+    }
+    lib.save(&state.data_dir.join(LIBRARY_FILE))
+        .map_err(|e| e.to_string())?;
+    Ok(lib.playlists.clone())
+}
+
+/// 调整曲目顺序:把 from 位置的条目移动到 to 位置
+#[tauri::command]
+fn move_playlist_entry(
+    playlist_id: String,
+    from: usize,
+    to: usize,
+    state: State<AppState>,
+) -> Result<Vec<model::Playlist>, String> {
+    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    let pl = lib
+        .playlists
+        .iter_mut()
+        .find(|p| p.id == playlist_id)
+        .ok_or("播放列表不存在")?;
+    let n = pl.entries.len();
+    if from >= n || to >= n || from == to {
+        return Ok(lib.playlists.clone());
+    }
+    let e = pl.entries.remove(from);
+    pl.entries.insert(to, e);
+    lib.save(&state.data_dir.join(LIBRARY_FILE))
+        .map_err(|e| e.to_string())?;
+    Ok(lib.playlists.clone())
+}
+
+// ===== TMCL 播放列表包(.tmcl = 标准 7z:音乐源文件 + 歌词 + 封面 + playlist.json) =====
+
+#[tauri::command]
+async fn pick_tmcl_dest(default_name: String) -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("导出 TMCL 播放列表")
+        .add_filter("TMCL 播放列表 (*.tmcl)", &["tmcl"])
+        .set_file_name(format!("{default_name}.tmcl"))
+        .save_file()
+        .await
+        .map(|f| f.path().to_string_lossy().to_string())
+}
+
+/// 把播放列表打包为 .tmcl:每首一个子目录(音频+歌词+封面+meta.json)+ 根级 playlist.json
+#[tauri::command]
+async fn export_playlist_tmcl(
+    playlist_id: String,
+    dest: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        export_playlist_tmcl_blocking(&playlist_id, &dest, &app)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn export_playlist_tmcl_blocking(
+    playlist_id: &str,
+    dest: &str,
+    app: &tauri::AppHandle,
+) -> Result<String, String> {
+    use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+
+    let state = app.state::<AppState>();
+    let (pl, tracks) = {
+        let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        let pl = lib
+            .playlists
+            .iter()
+            .find(|p| p.id == playlist_id)
+            .cloned()
+            .ok_or("播放列表不存在")?;
+        // 条目回查曲库:id 优先,路径兜底;两者都找不到则该曲目已不可用
+        let tracks: Vec<model::Track> = pl
+            .entries
+            .iter()
+            .filter_map(|e| {
+                lib.tracks
+                    .iter()
+                    .find(|t| t.id == e.id)
+                    .or_else(|| lib.tracks.iter().find(|t| t.path == e.path))
+                    .cloned()
+            })
+            .collect();
+        (pl, tracks)
+    };
+    if tracks.is_empty() {
+        return Err("播放列表为空或曲目文件均不可用".into());
+    }
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "taurimusic-tmcl-{}-{}",
+        std::process::id(),
+        &pl.id[..pl.id.len().min(8)]
+    ));
+    let _ = fs::remove_dir_all(&tmp_root);
+    fs::create_dir_all(&tmp_root).map_err(|e| e.to_string())?;
+
+    let mut manifest_tracks: Vec<serde_json::Value> = Vec::new();
+    let mut assets: Vec<(String, PathBuf)> = Vec::new();
+    for (i, t) in tracks.iter().enumerate() {
+        let audio = Path::new(&t.path);
+        if !audio.is_file() {
+            continue; // 文件缺失的条目静默跳过(名称已在曲库核对过)
+        }
+        let ext = audio
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase().to_string())
+            .unwrap_or_else(|| "mp3".into());
+        let stem = format!("{} - {}", sanitize_name(&t.title), sanitize_name(&t.artist));
+        let folder = format!("music/{:02}. {stem}", i + 1);
+        let audio_name = format!("{stem}.{ext}");
+
+        assets.push((format!("{folder}/{audio_name}"), audio.to_path_buf()));
+        let mut item = serde_json::json!({
+            "dir": folder,
+            "audio": audio_name,
+            "title": t.title,
+            "artist": t.artist,
+            "album": t.album,
+            "albumArtist": t.album_artist,
+            "duration": t.duration,
+        });
+        if let Some(lrc) = &t.lrc_path {
+            let lp = Path::new(lrc);
+            if lp.is_file() {
+                let lrc_name = format!("{stem}.lrc");
+                assets.push((format!("{folder}/{lrc_name}"), lp.to_path_buf()));
+                item["lrc"] = serde_json::json!(lrc_name);
+            }
+        }
+        if let Some(cover) = &t.cover {
+            let cp = Path::new(cover);
+            if cp.is_file() {
+                let cext = cp
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase().to_string())
+                    .unwrap_or_else(|| "jpg".into());
+                let cover_name = format!("{stem}.cover.{cext}");
+                assets.push((format!("{folder}/{cover_name}"), cp.to_path_buf()));
+                item["cover"] = serde_json::json!(cover_name);
+            }
+        }
+        // meta.json 供扫描器补齐无内嵌标签的文件;写在临时目录再随包
+        let meta_dir = tmp_root.join(format!("{i:02}"));
+        fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
+        let meta = serde_json::json!({
+            "title": t.title,
+            "artist": t.artist,
+            "album": t.album,
+            "albumArtist": t.album_artist,
+            "year": t.year,
+            "trackNo": t.track_no,
+            "genre": t.genre,
+        });
+        let meta_path = meta_dir.join("meta.json");
+        fs::write(
+            &meta_path,
+            serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        assets.push((format!("{folder}/meta.json"), meta_path));
+
+        manifest_tracks.push(item);
+    }
+    if manifest_tracks.is_empty() {
+        let _ = fs::remove_dir_all(&tmp_root);
+        return Err("播放列表中没有可导出的文件".into());
+    }
+
+    let manifest = serde_json::json!({
+        "format": "tmcl",
+        "version": 1,
+        "name": pl.name,
+        "createdAt": pl.created_at,
+        "tracks": manifest_tracks,
+    });
+    let manifest_path = tmp_root.join("playlist.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    assets.insert(0, ("playlist.json".to_string(), manifest_path));
+
+    let mut dest_path = PathBuf::from(dest);
+    if dest_path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase() != "tmcl")
+        .unwrap_or(true)
+    {
+        dest_path.set_extension("tmcl");
+    }
+    if let Some(parent) = dest_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let mut writer =
+        SevenZWriter::create(&dest_path).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
+    for (name, path) in &assets {
+        let file =
+            fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
+        writer
+            .push_archive_entry(
+                SevenZArchiveEntry::from_path(path, name.clone()),
+                Some(file),
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    writer
+        .finish()
+        .map_err(|e| format!("写入 TMCL 失败: {e}"))?;
+    let _ = fs::remove_dir_all(&tmp_root);
+    Ok(dest_path.to_string_lossy().to_string())
+}
+
+/// 导入 .tmcl:解包到导入目录 → 补 meta.json → 扫描 → 建立播放列表,返回列表名
+#[tauri::command]
+async fn import_playlist_tmcl(path: String, app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || import_playlist_tmcl_blocking(&path, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 路径规范化:统一分隔符为反斜杠并小写,用于跨来源路径比较
+/// (manifest 里的相对路径用 '/',walkdir 产生 '';Windows 也不区分大小写)
+fn norm_path(p: &str) -> String {
+    p.replace('/', "\\").to_lowercase()
+}
+
+fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, String> {
+    let src = Path::new(path);
+    if !src.is_file() {
+        return Err("文件不存在".into());
+    }
+    let state = app.state::<AppState>();
+    let stem = src
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "playlist".into());
+    let import_dir = state.data_dir.join(IMPORT_DIR_NAME);
+    fs::create_dir_all(&import_dir).map_err(|e| e.to_string())?;
+    let dest = import_dir.join(sanitize_name(&stem));
+    if dest.exists() {
+        fs::remove_dir_all(&dest).map_err(|e| format!("清理旧目录失败: {e}"))?;
+    }
+    fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    sevenz_rust::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
+
+    let manifest_path = dest.join("playlist.json");
+    if !manifest_path.is_file() {
+        return Err("不是有效的 TMCL:缺少 playlist.json".into());
+    }
+    let v: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("playlist.json 解析失败: {e}"))?;
+    let list_name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .unwrap_or_else(|| stem.clone());
+    let tracks_json = v
+        .get("tracks")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // 为无内嵌标签的文件写 meta.json(扫描器据此补齐元数据)
+    for item in &tracks_json {
+        let Some(dir) = item.get("dir").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let dir_path = dest.join(dir);
+        let _ = fs::create_dir_all(&dir_path);
+        let meta = serde_json::json!({
+            "title": item.get("title"),
+            "artist": item.get("artist"),
+            "album": item.get("album"),
+            "albumArtist": item.get("albumArtist"),
+        });
+        let _ = fs::write(
+            dir_path.join("meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap_or_default(),
+        );
+    }
+
+    // 扫描入库(与拖拽导入同一路径)
+    scanner::run_scan(app)?;
+
+    // 建立播放列表:优先用扫描后的曲库数据,否则退回 manifest 快照
+    let mut entries: Vec<model::PlaylistEntry> = Vec::new();
+    for item in &tracks_json {
+        let Some(dir) = item.get("dir").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let Some(audio) = item.get("audio").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let abs = dest.join(dir).join(audio);
+        if !abs.is_file() {
+            continue;
+        }
+        // 统一分隔符:manifest 用 '/',walkdir 的 track.path 用 '\'
+        let abs_str = abs.to_string_lossy().replace('/', "\\");
+        let abs_norm = norm_path(&abs_str);
+        let from_lib = {
+            let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+            lib.tracks
+                .iter()
+                .find(|t| t.path == abs_str || norm_path(&t.path) == abs_norm)
+                .cloned()
+        };
+        entries.push(match from_lib {
+            Some(t) => entry_of(&t),
+            None => model::PlaylistEntry {
+                id: String::new(),
+                path: abs_str,
+                title: item
+                    .get("title")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                artist: item
+                    .get("artist")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                album: item
+                    .get("album")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                album_artist: item
+                    .get("albumArtist")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                duration: item.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            },
+        });
+    }
+    if entries.is_empty() {
+        return Err("TMCL 中没有可导入的曲目".into());
+    }
+
+    let final_name = {
+        let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        let name = unique_playlist_name(&lib.playlists, &list_name);
+        lib.playlists.push(model::Playlist {
+            id: new_playlist_id(&name),
+            name: name.clone(),
+            created_at: now_secs(),
+            entries,
+        });
+        lib.save(&state.data_dir.join(LIBRARY_FILE))
+            .map_err(|e| e.to_string())?;
+        name
+    };
+    let _ = app.emit("library-changed", ());
+    Ok(final_name)
+}
+
 pub const ASSOC_EXTS: &[(&str, &str)] = &[
     ("tmc", "TMC 音乐包"),
+    ("tmcl", "TMCL 播放列表"),
     ("mp3", "MP3 音频"),
     ("flac", "FLAC 音频"),
     ("m4a", "M4A 音频"),
@@ -1300,6 +1831,15 @@ pub fn run() {
             get_associations,
             set_association,
             delete_tracks,
+            create_playlist,
+            rename_playlist,
+            delete_playlist,
+            add_tracks_to_playlist,
+            remove_playlist_entry,
+            move_playlist_entry,
+            pick_tmcl_dest,
+            export_playlist_tmcl,
+            import_playlist_tmcl,
             get_resource_usage
         ])
         .run(tauri::generate_context!())

@@ -1,7 +1,7 @@
 import { computed, shallowReactive } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { api, type Track } from "../api";
+import { api, type Playlist, type Track } from "../api";
 import { purgeDeleted } from "./player";
 
 export interface Album {
@@ -17,6 +17,7 @@ export interface Album {
 interface LibState {
   tracks: Track[];
   folders: string[];
+  playlists: Playlist[];
   loaded: boolean;
   /** 启动读库失败(区别于空库,给用户重试入口) */
   loadError: string | null;
@@ -34,6 +35,7 @@ interface LibState {
 export const lib = shallowReactive<LibState>({
   tracks: [],
   folders: [],
+  playlists: [],
   loaded: false,
   loadError: null,
   scanning: false,
@@ -45,6 +47,13 @@ export const lib = shallowReactive<LibState>({
 });
 
 let importStatusTimer = 0;
+
+/** 应用后端返回的曲库数据(曲目/文件夹/播放列表统一入口) */
+export function applyLibraryData(data: { tracks: Track[]; folders: string[]; playlists?: Playlist[] }): void {
+  lib.tracks = data.tracks;
+  lib.folders = data.folders;
+  if (data.playlists) lib.playlists = data.playlists;
+}
 
 let listenersInited = false;
 
@@ -62,8 +71,7 @@ function initLibraryListeners(): void {
     try {
       const before = new Set(lib.tracks.map((t) => t.id));
       const data = await api.getLibrary();
-      lib.tracks = data.tracks;
-      lib.folders = data.folders;
+      applyLibraryData(data);
       await enrichNewTracks(before, "已导入");
     } catch (err) {
       console.error("刷新曲库失败", err);
@@ -80,8 +88,7 @@ export async function initLibrary(): Promise<void> {
   initLibraryListeners();
   try {
     const data = await api.getLibrary();
-    lib.tracks = data.tracks;
-    lib.folders = data.folders;
+    applyLibraryData(data);
     lib.loadError = null;
   } catch (err) {
     console.error("读取曲库失败", err);
@@ -136,9 +143,28 @@ export function flashStatus(text: string): void {
 
 export async function importDropped(paths: string[]): Promise<void> {
   const before = new Set(lib.tracks.map((t) => t.id));
+  const tmcl = paths.filter((p) => p.toLowerCase().endsWith(".tmcl"));
   const tmc = paths.filter((p) => p.toLowerCase().endsWith(".tmc"));
-  const rest = paths.filter((p) => !p.toLowerCase().endsWith(".tmc"));
+  const rest = paths.filter(
+    (p) => !p.toLowerCase().endsWith(".tmc") && !p.toLowerCase().endsWith(".tmcl"),
+  );
   const parts: string[] = [];
+  if (tmcl.length) {
+    let ok = 0;
+    let fail = 0;
+    const names: string[] = [];
+    for (const p of tmcl) {
+      try {
+        names.push(await api.importPlaylistTmcl(p));
+        ok++;
+      } catch (err) {
+        console.error("导入 TMCL 失败", err);
+        fail++;
+        parts.push(`播放列表导入失败: ${String(err)}`);
+      }
+    }
+    if (ok) parts.push(`导入播放列表「${names.join("」「")}」${fail ? ` · ${fail} 个失败` : ""}`);
+  }
   if (tmc.length) {
     let ok = 0;
     let fail = 0;
@@ -330,18 +356,25 @@ export async function deleteTracks(ids: string[]): Promise<boolean> {
   if (ids.length === 0) return false;
   let ok = false;
   try {
-    const n = await api.deleteTracks(ids);
+    const r = await api.deleteTracks(ids);
     purgeDeleted(ids);
-    ok = n > 0;
-    flashStatus(n > 0 ? `已删除 ${n} 首(移入回收站)` : "删除失败:文件被占用");
+    ok = r.deleted > 0;
+    if (r.failed > 0) {
+      flashStatus(
+        r.deleted > 0
+          ? `已删除 ${r.deleted} 首,${r.failed} 首失败(文件被占用)`
+          : `删除失败:${r.failed} 首文件被占用`,
+      );
+    } else {
+      flashStatus(r.deleted > 0 ? `已删除 ${r.deleted} 首(移入回收站)` : "删除失败");
+    }
   } catch (err) {
     console.error("删除失败", err);
     flashStatus("删除失败");
   }
   try {
     const data = await api.getLibrary();
-    lib.tracks = data.tracks;
-    lib.folders = data.folders;
+    applyLibraryData(data);
   } catch (err) {
     console.error("刷新曲库失败", err);
   }
@@ -364,8 +397,7 @@ export async function rescan(): Promise<void> {
   try {
     await api.scan();
     const data = await api.getLibrary();
-    lib.tracks = data.tracks;
-    lib.folders = data.folders;
+    applyLibraryData(data);
   } catch (err) {
     console.error("扫描失败", err);
   } finally {

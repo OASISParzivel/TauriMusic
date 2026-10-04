@@ -1,0 +1,197 @@
+<script setup lang="ts">
+import { computed } from "vue";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { lib } from "../stores/library";
+import { openPlaylist, ui } from "../stores/ui";
+import { openCtx } from "../stores/context";
+import {
+  askCreatePlaylist,
+  askRenamePlaylist,
+  deletePlaylist,
+  exportPlaylist,
+  resolvePlaylist,
+  type ResolvedEntry,
+} from "../stores/playlists";
+import LibGate from "../components/LibGate.vue";
+import type { Playlist } from "../api";
+
+const sorted = computed(() =>
+  [...lib.playlists].sort((a, b) => b.createdAt - a.createdAt),
+);
+
+/** 取前 4 张可解析曲目的封面做 2x2 拼贴 */
+function collage(p: Playlist): string[] {
+  const covers: string[] = [];
+  for (const r of resolvePlaylist(p)) {
+    if (r.track?.cover) {
+      covers.push(convertFileSrc(r.track.cover));
+      if (covers.length === 4) break;
+    }
+  }
+  return covers;
+}
+
+const countOf = (p: Playlist): number => p.entries.length;
+const missingOf = (p: Playlist): number =>
+  resolvePlaylist(p).filter((r: ResolvedEntry) => !r.track).length;
+
+function menu(e: MouseEvent, p: Playlist): void {
+  openCtx(e, [
+    { label: "打开播放列表", icon: "playlist", action: () => openPlaylist(p.id) },
+    { label: "导出为 TMCL", icon: "export", action: () => void exportPlaylist(p) },
+    { label: "重命名", icon: "edit", action: () => askRenamePlaylist(p) },
+    {
+      label: "删除播放列表",
+      icon: "delete",
+      danger: true,
+      action: () => void deletePlaylist(p),
+    },
+  ]);
+}
+</script>
+
+<template>
+  <div class="view">
+    <LibGate>
+      <header class="view-head">
+        <h1>播放列表</h1>
+        <div class="right">
+          <span class="count">{{ lib.playlists.length }} 个</span>
+          <button class="new-btn" @click="askCreatePlaylist">新建播放列表</button>
+        </div>
+      </header>
+
+      <div v-if="sorted.length === 0" class="empty">
+        <h2>还没有播放列表</h2>
+        <p>把喜欢的歌收进自己的歌单,可自由命名、导出为 TMCL 分享或备份</p>
+        <button class="primary-pill" style="margin-top: 8px" @click="askCreatePlaylist">
+          新建播放列表
+        </button>
+      </div>
+
+      <div v-else class="grid">
+        <div
+          v-for="p in sorted"
+          :key="p.id"
+          class="card"
+          :class="{ active: ui.view === 'playlist' && ui.playlistId === p.id }"
+          @click="openPlaylist(p.id)"
+          @contextmenu="menu($event, p)"
+        >
+          <div class="cover-collage">
+            <template v-if="collage(p).length">
+              <img
+                v-for="(c, i) in collage(p)"
+                :key="i"
+                :src="c"
+                loading="lazy"
+                :class="{ single: collage(p).length === 1 }"
+                alt=""
+              />
+            </template>
+            <div v-else class="ph">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                <path d="M4 6.5h11M4 12h11M4 17.5h7" />
+                <circle cx="18.5" cy="15.5" r="2.2" />
+                <path d="M20.7 15.5V9l-3.4.9" />
+              </svg>
+            </div>
+          </div>
+          <div class="name" :title="p.name">{{ p.name }}</div>
+          <div class="meta">
+            {{ countOf(p) }} 首<template v-if="missingOf(p)"> · {{ missingOf(p) }} 首缺失</template>
+          </div>
+        </div>
+      </div>
+    </LibGate>
+  </div>
+</template>
+
+<style scoped>
+.right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.new-btn {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 6px 16px;
+  transition: background 0.2s ease, transform 0.35s var(--ease-spring);
+}
+.new-btn:hover {
+  background: var(--accent-hover);
+}
+.new-btn:active {
+  transform: scale(0.97);
+  transition-duration: 0.09s;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 24px 20px;
+}
+.card {
+  cursor: pointer;
+  min-width: 0;
+}
+.cover-collage {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--card-shadow);
+  background: var(--bg-3);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 1px;
+  transition: transform 0.45s var(--ease-spring);
+}
+.card:hover .cover-collage {
+  transform: translateY(-4px) scale(1.015);
+}
+.cover-collage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cover-collage img.single {
+  grid-column: 1 / 3;
+  grid-row: 1 / 3;
+}
+.cover-collage .ph {
+  grid-column: 1 / 3;
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+.cover-collage .ph svg {
+  width: 42px;
+  height: 42px;
+}
+.card.active .cover-collage {
+  box-shadow: 0 0 0 2px var(--accent), var(--card-shadow);
+}
+
+.name {
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+</style>

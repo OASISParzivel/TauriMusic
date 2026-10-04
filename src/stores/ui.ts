@@ -2,7 +2,15 @@ import { ref, reactive, watchEffect } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StorageKeys, storageGetString, storageRemove, storageSet } from "./storage";
 
-export type ViewName = "home" | "albums" | "album" | "artists" | "songs" | "search";
+export type ViewName =
+  | "home"
+  | "albums"
+  | "album"
+  | "artists"
+  | "songs"
+  | "search"
+  | "playlists"
+  | "playlist";
 /** 皮肤模式:跟随系统 / 浅色 / 黑色 */
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -12,6 +20,8 @@ interface UiState {
   albumKey: string | null;
   /** 当前打开的艺人名 */
   artist: string | null;
+  /** 当前打开的播放列表 id */
+  playlistId: string | null;
   /** 搜索关键词 */
   search: string;
   /** 解析后的深色状态(供玻璃令牌等使用) */
@@ -34,6 +44,7 @@ export const ui = reactive<UiState>({
   view: "home",
   albumKey: null,
   artist: null,
+  playlistId: null,
   search: "",
   dark: false,
   themeMode: "system",
@@ -76,6 +87,12 @@ export function openArtist(name: string): void {
   ui.artist = name;
   ui.search = "";
   ui.view = "artists";
+}
+
+export function openPlaylist(id: string): void {
+  ui.playlistId = id;
+  ui.search = "";
+  ui.view = "playlist";
 }
 
 export function setThemeMode(mode: ThemeMode): void {

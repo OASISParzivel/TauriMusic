@@ -13,7 +13,7 @@ const themeOptions = [
 
 const FORMAT_HINT = "支持 MP3 / FLAC / M4A / OGG / OPUS / WAV · 歌词支持内嵌或同名 .lrc · 封面自动识别";
 const TMC_HINT =
-  "TMC 音乐包为标准 7z 压缩包:内含音频、同名 .lrc 歌词、cover.jpg/png 封面与 meta.json 元数据。把 .tmc 拖进窗口即可导入;在歌曲列表悬停某行可一键导出 TMC。";
+  "TMC 音乐包为标准 7z 压缩包:内含音频、同名 .lrc 歌词、cover.jpg/png 封面与 meta.json 元数据。把 .tmc 拖进窗口即可导入;在歌曲列表悬停某行可一键导出 TMC。TMCL 播放列表(.tmcl)同为 7z,内含整单音乐源文件与 playlist.json,在播放列表页导出,拖进窗口即导入。";
 const ASSOC_HINT =
   "勾选后 TauriMusic 出现在右键\"打开方式\"列表,并注册为当前用户的双击默认程序。若双击仍由其他应用打开,说明系统记住了旧默认:请在\"设置 → 默认应用\"中调整,或在文件右键\"打开方式 → 选择其他应用\"勾选\"始终\"。";
 
@@ -90,7 +90,7 @@ async function toggleAssoc(a: AssocState): Promise<void> {
       <div class="row">
         <span class="row-label">TMC 音乐包</span>
         <div class="btns">
-          <button class="mini" @click="importTmcPick">导入 TMC 文件</button>
+          <button class="mini" @click="importTmcPick">导入 TMC / TMCL</button>
         </div>
       </div>
       <p class="hint">{{ TMC_HINT }}</p>

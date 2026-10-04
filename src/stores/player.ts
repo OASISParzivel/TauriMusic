@@ -31,8 +31,19 @@ export const player = shallowReactive<PlayerState>({
   position: 0,
   duration: 0,
   volume: Number(storageGetString(StorageKeys.volume, "1")),
-  mode: "seq",
+  mode: loadSavedMode(),
 });
+
+function loadSavedMode(): PlayMode {
+  const saved = storageGetString(StorageKeys.mode, "seq");
+  return (MODE_ORDER as string[]).includes(saved) ? (saved as PlayMode) : "seq";
+}
+
+/** 切换播放模式并持久化(重启后保持) */
+export function setMode(m: PlayMode): void {
+  player.mode = m;
+  storageSet(StorageKeys.mode, m);
+}
 
 export const current = computed<Track | null>(() => player.queue[player.index] ?? null);
 
@@ -43,6 +54,52 @@ let audio: HTMLAudioElement | null = null;
 let raf = 0;
 /** 连续加载失败计数,成功播放后清零(防全坏队列无限跳曲) */
 let errorStreak = 0;
+
+/** 实际播放过的下标历史:prev() 据此回到"真正播过的那首"(随机模式下尤其重要) */
+let playHistory: number[] = [];
+/** 洗牌袋:当前队列下标的一个随机排列,播完一轮才重新洗牌(避免有放回抽样的重复感) */
+let bag: number[] = [];
+/** 袋子对应的队列引用:队列被替换(playTracks/删除清理)时自动重建 */
+let bagQueue: Track[] | null = null;
+
+function pushHistory(idx: number): void {
+  if (idx < 0) return;
+  playHistory.push(idx);
+  if (playHistory.length > 200) playHistory.shift();
+}
+
+function rebuildBag(n: number): void {
+  bag = Array.from({ length: n }, (_, i) => i);
+  for (let i = bag.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [bag[i], bag[j]] = [bag[j], bag[i]];
+  }
+}
+
+/** 从洗牌袋取下一个下标:整袋播完才重洗,且绝不与当前曲目立即重复 */
+function takeShuffleIndex(n: number, current: number): number {
+  if (bagQueue !== player.queue) {
+    bag = [];
+    bagQueue = player.queue;
+  }
+  for (;;) {
+    if (bag.length === 0) rebuildBag(n);
+    if (n > 1 && bag[bag.length - 1] === current) {
+      // 袋顶恰是当前曲目:与非当前的随机位置交换;若袋里只剩它则重洗并剔除
+      if (bag.length > 1) {
+        const j = Math.floor(Math.random() * (bag.length - 1));
+        [bag[bag.length - 1], bag[j]] = [bag[j], bag[bag.length - 1]];
+      } else {
+        rebuildBag(n);
+        bag = bag.filter((x) => x !== current);
+      }
+      continue;
+    }
+    const idx = bag.pop();
+    if (idx === undefined) return current; // n<=1 情形,调用方已拦截,兜底
+    return idx;
+  }
+}
 
 function ensureAudio(): HTMLAudioElement {
   if (audio) return audio;
@@ -124,11 +181,14 @@ export function purgeDeleted(ids: string[]): void {
   player.index = idx;
 }
 
-/** 以一组曲目作为队列播放,start 为起始下标 */
+/** 以一组曲目作为队列播放,start 为起始下标。新队列重置播放历史与洗牌袋 */
 export function playTracks(tracks: Track[], start = 0): void {
   if (tracks.length === 0) return;
   player.queue = tracks;
   player.index = Math.max(0, Math.min(start, tracks.length - 1));
+  playHistory = [];
+  bag = [];
+  bagQueue = tracks;
   load(player.queue[player.index]);
 }
 
@@ -174,9 +234,7 @@ export function next(manual = true): void {
 
   let idx: number;
   if (mode === "shuffle") {
-    do {
-      idx = Math.floor(Math.random() * n);
-    } while (idx === player.index);
+    idx = takeShuffleIndex(n, player.index);
   } else {
     idx = player.index + 1;
     if (idx >= n) {
@@ -187,6 +245,7 @@ export function next(manual = true): void {
       }
     }
   }
+  pushHistory(player.index);
   player.index = idx;
   load(player.queue[idx]);
 }
@@ -199,8 +258,13 @@ export function prev(): void {
     a.currentTime = 0;
     return;
   }
-  let idx = player.index - 1;
-  if (idx < 0) idx = player.mode === "loop" ? n - 1 : 0;
+  // 优先回到实际播放过的上一首(随机模式下这是唯一正确的语义);
+  // 历史为空时退化为队列顺序的上一首
+  let idx = playHistory.pop();
+  if (idx === undefined || idx < 0 || idx >= n) {
+    idx = player.index - 1;
+    if (idx < 0) idx = player.mode === "loop" ? n - 1 : 0;
+  }
   player.index = idx;
   load(player.queue[idx]);
 }
@@ -232,10 +296,10 @@ export function setVolume(v: number): void {
   if (audio) audio.volume = clamped;
 }
 
-/** 顺序播放 → 列表循环 → 单曲循环 → 随机播放 → 顺序播放 */
+/** 顺序播放 → 列表循环 → 单曲循环 → 随机播放 → 顺序播放(切换即持久化) */
 export function cycleMode(): void {
   const i = MODE_ORDER.indexOf(player.mode);
-  player.mode = MODE_ORDER[(i + 1) % MODE_ORDER.length];
+  setMode(MODE_ORDER[(i + 1) % MODE_ORDER.length]);
 }
 
 export function fmtTime(s: number): string {

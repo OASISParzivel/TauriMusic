@@ -7,6 +7,10 @@ import NowPlaying from "./components/NowPlaying.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import AboutModal from "./components/AboutModal.vue";
 import WelcomeModal from "./components/WelcomeModal.vue";
+import PlaylistsView from "./views/PlaylistsView.vue";
+import PlaylistDetailView from "./views/PlaylistDetailView.vue";
+import NameModal from "./components/NameModal.vue";
+import PlaylistPickerModal from "./components/PlaylistPickerModal.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import HomeView from "./views/HomeView.vue";
 import AlbumsView from "./views/AlbumsView.vue";
@@ -18,6 +22,7 @@ import { ui, initTheme, initGlass, initWelcome } from "./stores/ui";
 import { initLibrary, initDragImport } from "./stores/library";
 import { initShortcuts } from "./stores/shortcuts";
 import { current } from "./stores/player";
+import { nameDialog, picker } from "./stores/playlists";
 
 const views = {
   home: HomeView,
@@ -26,11 +31,15 @@ const views = {
   artists: ArtistsView,
   songs: SongsView,
   search: SearchView,
+  playlists: PlaylistsView,
+  playlist: PlaylistDetailView,
 } as const;
 
 const view = computed(() => views[ui.view]);
 /* 视图或其参数变化都重新触发页面过渡 */
-const pageKey = computed(() => `${ui.view}|${ui.albumKey ?? ""}|${ui.artist ?? ""}`);
+const pageKey = computed(
+  () => `${ui.view}|${ui.albumKey ?? ""}|${ui.artist ?? ""}|${ui.playlistId ?? ""}`,
+);
 
 const ambientImg = computed(() =>
   current.value?.cover ? `url("${convertFileSrc(current.value.cover)}")` : "",
@@ -87,6 +96,13 @@ onMounted(() => {
     </Transition>
     <Transition name="modal">
       <WelcomeModal v-if="ui.welcomeOpen" />
+    </Transition>
+
+    <Transition name="modal">
+      <NameModal v-if="nameDialog.open" />
+    </Transition>
+    <Transition name="modal">
+      <PlaylistPickerModal v-if="picker.trackIds" />
     </Transition>
 
     <ContextMenu />

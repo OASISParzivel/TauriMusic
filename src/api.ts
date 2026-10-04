@@ -63,6 +63,30 @@ export interface AssocState {
   registered: boolean;
 }
 
+/** 播放列表条目:曲库引用 + 元数据快照 */
+export interface PlaylistEntry {
+  id: string;
+  path: string;
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist: string;
+  duration: number;
+}
+
+export interface Playlist {
+  id: string;
+  name: string;
+  createdAt: number;
+  entries: PlaylistEntry[];
+}
+
+export interface AddToPlaylistReport {
+  added: number;
+  skipped: number;
+  playlists: Playlist[];
+}
+
 export interface ResourceUsage {
   /** 主进程内存占用(MB) */
   memory_mb: number;
@@ -89,6 +113,20 @@ export const api = {
   neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
   getAssociations: () => invoke<AssocState[]>("get_associations"),
   setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),
-  deleteTracks: (ids: string[]) => invoke<number>("delete_tracks", { ids }),
+  deleteTracks: (ids: string[]) =>
+    invoke<{ deleted: number; failed: number }>("delete_tracks", { ids }),
+  createPlaylist: (name: string) => invoke<Playlist[]>("create_playlist", { name }),
+  renamePlaylist: (id: string, name: string) => invoke<Playlist[]>("rename_playlist", { id, name }),
+  deletePlaylist: (id: string) => invoke<Playlist[]>("delete_playlist", { id }),
+  addTracksToPlaylist: (playlistId: string, trackIds: string[]) =>
+    invoke<AddToPlaylistReport>("add_tracks_to_playlist", { playlistId, trackIds }),
+  removePlaylistEntry: (playlistId: string, index: number) =>
+    invoke<Playlist[]>("remove_playlist_entry", { playlistId, index }),
+  movePlaylistEntry: (playlistId: string, from: number, to: number) =>
+    invoke<Playlist[]>("move_playlist_entry", { playlistId, from, to }),
+  pickTmclDest: (defaultName: string) => invoke<string | null>("pick_tmcl_dest", { defaultName }),
+  exportPlaylistTmcl: (playlistId: string, dest: string) =>
+    invoke<string>("export_playlist_tmcl", { playlistId, dest }),
+  importPlaylistTmcl: (path: string) => invoke<string>("import_playlist_tmcl", { path }),
   getResourceUsage: () => invoke<ResourceUsage>("get_resource_usage"),
 };
