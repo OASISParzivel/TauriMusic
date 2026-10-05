@@ -891,6 +891,35 @@ fn artist_matches(artist: &str, candidate: &str) -> bool {
         .any(|seg| name_matches(seg, candidate))
 }
 
+/// 去掉标题里的括号段(全角/半角):酷我搜索对括号敏感,
+/// 「八千里路明月照（挥笔生花问桀骜）」整串搜索命中不了原曲,去掉后能精确命中
+fn strip_bracketed(s: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0u32;
+    for c in s.chars() {
+        match c {
+            '(' | '（' | '【' | '「' | '『' | '[' => depth += 1,
+            ')' | '）' | '】' | '」' | '』' | ']' => {
+                depth = depth.saturating_sub(1);
+                out.push(' ');
+            }
+            c if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
+/// 酷我搜索关键词:完整标题优先,有括号段时再补一条去括号的
+fn kuwo_keywords(title: &str, artist: &str) -> Vec<String> {
+    let mut keys = vec![format!("{title} {artist}")];
+    let stripped = strip_bracketed(title);
+    if !stripped.is_empty() && stripped != title {
+        keys.push(format!("{stripped} {artist}"));
+    }
+    keys
+}
+
 fn netease_search(
     client: &reqwest::blocking::Client,
     keyword: &str,
@@ -1274,18 +1303,15 @@ fn build_lrc_from_kuwo(lines: &[serde_json::Value]) -> Option<String> {
     (!out.is_empty()).then(|| out.trim_end().to_string())
 }
 
-/// 酷我歌词兜底:LRCLIB 也没有时再试酷我
-pub fn kuwo_lyric(
+/// 酷我歌曲搜索:返回 abslist 列表(单引号伪 JSON 已修复为严格 JSON)
+fn kuwo_search(
     client: &reqwest::blocking::Client,
-    title: &str,
-    artist: &str,
-    duration: Option<f64>,
-) -> Option<String> {
-    // 1) 搜索(单引号伪 JSON):按「歌名 艺人」检索,取 MUSICRID
+    keyword: &str,
+) -> Option<Vec<serde_json::Value>> {
     let resp = client
         .get("http://search.kuwo.cn/r.s")
         .query(&[
-            ("all", format!("{title} {artist}")),
+            ("all", keyword.to_string()),
             ("ft", "music".to_string()),
             ("itemset", "web_2013".to_string()),
             ("client", "mp".to_string()),
@@ -1302,40 +1328,11 @@ pub fn kuwo_lyric(
     }
     let raw = resp.text().ok()?;
     let v: serde_json::Value = serde_json::from_str(&kuwo_fix_json(&raw)).ok()?;
-    let list = v["abslist"].as_array()?;
-    let matched: Vec<&serde_json::Value> = list
-        .iter()
-        .filter(|s| {
-            s["ARTIST"]
-                .as_str()
-                .map(|n| artist_matches(artist, &html_unescape(n)))
-                .unwrap_or(false)
-        })
-        .collect();
-    let pool: Vec<&serde_json::Value> = if matched.is_empty() {
-        list.iter().collect()
-    } else {
-        matched
-    };
-    // 优先取时长与本地文件吻合的候选,无吻合时退回首个
-    let pick = pool
-        .iter()
-        .copied()
-        .find(|s| {
-            match (
-                duration,
-                s["DURATION"]
-                    .as_str()
-                    .and_then(|d| d.trim().parse::<f64>().ok()),
-            ) {
-                (Some(d), Some(k)) => (d - k).abs() <= 5.0,
-                _ => false,
-            }
-        })
-        .or_else(|| pool.first().copied())?;
-    let rid = pick["MUSICRID"].as_str()?.trim_start_matches("MUSIC_");
+    v["abslist"].as_array().cloned()
+}
 
-    // 2) 歌词详情:必须带 m 站 Referer,否则报「音乐查询失败」
+/// 酷我歌曲详情(必须带 m 站 Referer,否则报「音乐查询失败」):返回 data 节点
+fn kuwo_song_detail(client: &reqwest::blocking::Client, rid: &str) -> Option<serde_json::Value> {
     let resp = client
         .get("http://m.kuwo.cn/newh5/singles/songinfoandlrc")
         .query(&[("musicId", rid)])
@@ -1348,13 +1345,68 @@ pub fn kuwo_lyric(
     if !resp.status().is_success() {
         return None;
     }
-    let v: serde_json::Value = resp.json().ok()?;
-    let lines = v["data"]["lrclist"].as_array()?;
-    build_lrc_from_kuwo(lines)
+    resp.json::<serde_json::Value>().ok()?.get("data").cloned()
+}
+
+/// 酷我歌词兜底:LRCLIB 也没有时再试酷我
+pub fn kuwo_lyric(
+    client: &reqwest::blocking::Client,
+    title: &str,
+    artist: &str,
+    duration: Option<f64>,
+) -> Option<String> {
+    for kw in kuwo_keywords(title, artist) {
+        let Some(list) = kuwo_search(client, &kw) else {
+            continue;
+        };
+        let matched: Vec<&serde_json::Value> = list
+            .iter()
+            .filter(|s| {
+                s["ARTIST"]
+                    .as_str()
+                    .map(|n| artist_matches(artist, &html_unescape(n)))
+                    .unwrap_or(false)
+            })
+            .collect();
+        let pool: Vec<&serde_json::Value> = if matched.is_empty() {
+            list.iter().collect()
+        } else {
+            matched
+        };
+        // 优先取时长与本地文件吻合的候选,无吻合时退回首个
+        let pick = pool
+            .iter()
+            .copied()
+            .find(|s| {
+                match (
+                    duration,
+                    s["DURATION"]
+                        .as_str()
+                        .and_then(|d| d.trim().parse::<f64>().ok()),
+                ) {
+                    (Some(d), Some(k)) => (d - k).abs() <= 5.0,
+                    _ => false,
+                }
+            })
+            .or_else(|| pool.first().copied());
+        let Some(pick) = pick else { continue };
+        let Some(rid) = pick["MUSICRID"].as_str() else {
+            continue;
+        };
+        let Some(data) = kuwo_song_detail(client, rid.trim_start_matches("MUSIC_")) else {
+            continue;
+        };
+        if let Some(lines) = data["lrclist"].as_array() {
+            if let Some(text) = build_lrc_from_kuwo(lines) {
+                return Some(text);
+            }
+        }
+    }
+    None
 }
 
 /// 酷我封面兜底:网易云与 iTunes 都没有时(抖音神曲/新歌常见),从酷我取官方专辑封面。
-/// 搜索「歌名 艺人」选曲后从 songinfo.pic 取图并升级为 900 高清;
+/// 搜索选曲后从 songinfo.pic 取图并升级为 900 高清;
 /// 本地标签艺人常有错字(如「泛国同学」vs「泽国同学」),艺人全对不上时
 /// 只有时长 ±2s 吻合才敢要,防止拿到同名的别家封面
 pub fn kuwo_album_cover(
@@ -1363,75 +1415,50 @@ pub fn kuwo_album_cover(
     artist: &str,
     duration: Option<f64>,
 ) -> Option<String> {
-    let resp = client
-        .get("http://search.kuwo.cn/r.s")
-        .query(&[
-            ("all", format!("{title} {artist}")),
-            ("ft", "music".to_string()),
-            ("itemset", "web_2013".to_string()),
-            ("client", "mp".to_string()),
-            ("pn", "0".to_string()),
-            ("rn", "10".to_string()),
-            ("rformat", "json".to_string()),
-            ("encoding", "utf8".to_string()),
-            ("vipver", "MUSIC_8.0.3.2_QQZS".to_string()),
-        ])
-        .send()
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let raw = resp.text().ok()?;
-    let v: serde_json::Value = serde_json::from_str(&kuwo_fix_json(&raw)).ok()?;
-    let list = v["abslist"].as_array()?;
-    let parse_dur = |s: &serde_json::Value| {
-        s["DURATION"]
-            .as_str()
-            .and_then(|d| d.trim().parse::<f64>().ok())
-    };
-    let matched: Vec<&serde_json::Value> = list
-        .iter()
-        .filter(|s| {
-            s["ARTIST"]
+    for kw in kuwo_keywords(title, artist) {
+        let Some(list) = kuwo_search(client, &kw) else {
+            continue;
+        };
+        let parse_dur = |s: &serde_json::Value| {
+            s["DURATION"]
                 .as_str()
-                .map(|n| artist_matches(artist, &html_unescape(n)))
-                .unwrap_or(false)
-        })
-        .collect();
-    let pick = if !matched.is_empty() {
-        matched
+                .and_then(|d| d.trim().parse::<f64>().ok())
+        };
+        let matched: Vec<&serde_json::Value> = list
             .iter()
-            .copied()
-            .find(|s| match (duration, parse_dur(s)) {
-                (Some(d), Some(k)) => (d - k).abs() <= 5.0,
-                _ => false,
+            .filter(|s| {
+                s["ARTIST"]
+                    .as_str()
+                    .map(|n| artist_matches(artist, &html_unescape(n)))
+                    .unwrap_or(false)
             })
-            .unwrap_or(matched[0])
-    } else {
-        duration.and_then(|d| {
-            list.iter()
-                .find(|s| parse_dur(s).map(|k| (d - k).abs() <= 2.0).unwrap_or(false))
-        })?
-    };
-    let rid = pick["MUSICRID"].as_str()?.trim_start_matches("MUSIC_");
-
-    // 歌曲详情(需 m 站 Referer):songinfo.pic 即官方专辑封面,路径里的 240 可升为 900 高清
-    let resp = client
-        .get("http://m.kuwo.cn/newh5/singles/songinfoandlrc")
-        .query(&[("musicId", rid)])
-        .header(
-            reqwest::header::REFERER,
-            "https://m.kuwo.cn/newh5/singles/songinfoandlrc",
-        )
-        .send()
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+            .collect();
+        let pick = if !matched.is_empty() {
+            matched
+                .iter()
+                .copied()
+                .find(|s| match (duration, parse_dur(s)) {
+                    (Some(d), Some(k)) => (d - k).abs() <= 5.0,
+                    _ => false,
+                })
+                .unwrap_or(matched[0])
+        } else {
+            duration.and_then(|d| {
+                list.iter()
+                    .find(|s| parse_dur(s).map(|k| (d - k).abs() <= 2.0).unwrap_or(false))
+            })?
+        };
+        let Some(rid) = pick["MUSICRID"].as_str() else {
+            continue;
+        };
+        let Some(data) = kuwo_song_detail(client, rid.trim_start_matches("MUSIC_")) else {
+            continue;
+        };
+        if let Some(pic) = data["songinfo"]["pic"].as_str() {
+            return Some(pic.replace("/albumcover/240/", "/albumcover/900/"));
+        }
     }
-    let v: serde_json::Value = resp.json().ok()?;
-    v["data"]["songinfo"]["pic"]
-        .as_str()
-        .map(|s| s.replace("/albumcover/240/", "/albumcover/900/"))
+    None
 }
 
 // ===== 格式关联(HKCU 注册到"打开方式",无需管理员) =====
@@ -2513,6 +2540,30 @@ mod tests {
         );
         // 空列表 → None
         assert_eq!(build_lrc_from_kuwo(&[]), None);
+    }
+
+    #[test]
+    fn strip_bracketed_removes_parenthetical_for_search() {
+        use super::{kuwo_keywords, strip_bracketed};
+        assert_eq!(
+            strip_bracketed("八千里路明月照（挥笔生花问桀骜）"),
+            "八千里路明月照"
+        );
+        assert_eq!(strip_bracketed("Song (Live)"), "Song");
+        assert_eq!(strip_bracketed("A【B】C"), "A C");
+        assert_eq!(strip_bracketed("普通标题"), "普通标题");
+        // 关键词组:完整标题在前,去括号的在后(与原标题相同则只有一条)
+        assert_eq!(
+            kuwo_keywords("八千里路明月照（挥笔生花问桀骜）", "泛国同学"),
+            vec![
+                "八千里路明月照（挥笔生花问桀骜） 泛国同学".to_string(),
+                "八千里路明月照 泛国同学".to_string(),
+            ]
+        );
+        assert_eq!(
+            kuwo_keywords("普通标题", "艺人"),
+            vec!["普通标题 艺人".to_string()]
+        );
     }
 
     #[test]
