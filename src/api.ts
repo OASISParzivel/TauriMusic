@@ -105,11 +105,17 @@ export const api = {
   openImportDir: () => invoke<string>("open_import_dir"),
   importPaths: (paths: string[]) => invoke<ImportReport>("import_paths", { paths }),
   importTmc: (path: string) => invoke<string>("import_tmc", { path }),
-  exportTmc: (id: string, dest: string) => invoke<string>("export_tmc", { id, dest }),
   pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
   pickAudioFiles: () => invoke<string[] | null>("pick_audio_files"),
-  pickTmcDest: (defaultName: string) => invoke<string | null>("pick_tmc_dest", { defaultName }),
   pickExportDir: () => invoke<string | null>("pick_export_dir"),
+  // 两阶段导出:先打包到 Temp 暂存区(弹窗显示进度),就绪后用户点「导出」再落位完整文件
+  makeStageDir: () => invoke<string>("make_stage_dir"),
+  stageTmc: (id: string, staging: string) => invoke<string>("stage_tmc", { id, staging }),
+  stageTmcl: (playlistId: string, staging: string) =>
+    invoke<string>("stage_tmcl", { playlistId, staging }),
+  placeStaged: (files: string[], destDir: string) =>
+    invoke<string[]>("place_staged", { files, destDir }),
+  cleanupStage: (dir: string) => invoke<void>("cleanup_stage", { dir }),
   neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
   getAssociations: () => invoke<AssocState[]>("get_associations"),
   setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),
@@ -124,9 +130,6 @@ export const api = {
     invoke<Playlist[]>("remove_playlist_entry", { playlistId, index }),
   movePlaylistEntry: (playlistId: string, from: number, to: number) =>
     invoke<Playlist[]>("move_playlist_entry", { playlistId, from, to }),
-  pickTmclDest: (defaultName: string) => invoke<string | null>("pick_tmcl_dest", { defaultName }),
-  exportPlaylistTmcl: (playlistId: string, dest: string) =>
-    invoke<string>("export_playlist_tmcl", { playlistId, dest }),
   importPlaylistTmcl: (path: string) => invoke<string>("import_playlist_tmcl", { path }),
   getResourceUsage: () => invoke<ResourceUsage>("get_resource_usage"),
 };

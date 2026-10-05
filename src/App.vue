@@ -11,6 +11,7 @@ import PlaylistsView from "./views/PlaylistsView.vue";
 import PlaylistDetailView from "./views/PlaylistDetailView.vue";
 import NameModal from "./components/NameModal.vue";
 import PlaylistPickerModal from "./components/PlaylistPickerModal.vue";
+import ExportModal from "./components/ExportModal.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import HomeView from "./views/HomeView.vue";
 import AlbumsView from "./views/AlbumsView.vue";
@@ -19,7 +20,7 @@ import ArtistsView from "./views/ArtistsView.vue";
 import SongsView from "./views/SongsView.vue";
 import SearchView from "./views/SearchView.vue";
 import { ui, initTheme, initGlass, initWelcome } from "./stores/ui";
-import { initLibrary, initDragImport } from "./stores/library";
+import { exportState, initLibrary, initDragImport } from "./stores/library";
 import { initShortcuts } from "./stores/shortcuts";
 import { current } from "./stores/player";
 import { nameDialog, picker } from "./stores/playlists";
@@ -103,6 +104,9 @@ onMounted(() => {
     </Transition>
     <Transition name="modal">
       <PlaylistPickerModal v-if="picker.trackIds" />
+    </Transition>
+    <Transition name="modal">
+      <ExportModal v-if="exportState.open" />
     </Transition>
 
     <ContextMenu />

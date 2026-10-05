@@ -401,19 +401,21 @@ html.glass .topbar {
 
 html.dark.glass .sidebar,
 html.dark.glass .topbar {
+  /* 烟熏厚玻璃:竖向厚度层次(顶部受光、中段沉底),不再是均匀的灰塑料板 */
   background:
-    linear-gradient(115deg, rgba(36, 33, 46, 0.5) 0%, rgba(24, 22, 32, 0.36) 55%, rgba(32, 29, 42, 0.46) 100%) padding-box,
-    linear-gradient(135deg, rgba(255, 255, 255, 0.65) 0%, rgba(255, 255, 255, 0.14) 26%, rgba(255, 255, 255, 0.04) 50%, rgba(255, 255, 255, 0.1) 72%, rgba(255, 255, 255, 0.5) 100%) border-box;
-  backdrop-filter: blur(36px) saturate(2) brightness(1.12);
-  -webkit-backdrop-filter: blur(36px) saturate(2) brightness(1.12);
+    linear-gradient(180deg, rgba(56, 52, 70, 0.58) 0%, rgba(30, 27, 40, 0.56) 30%, rgba(16, 14, 22, 0.64) 72%, rgba(24, 22, 33, 0.6) 100%) padding-box,
+    /* 边缘只在顶边留一线高光,侧面近乎无光 */
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.06) 10%, rgba(255, 255, 255, 0.02) 55%, rgba(255, 255, 255, 0.12) 100%) border-box;
+  backdrop-filter: blur(42px) saturate(1.45);
+  -webkit-backdrop-filter: blur(42px) saturate(1.45);
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.4),
-    inset 0 -1px 1px rgba(255, 255, 255, 0.24),
-    inset 1px 0 1px rgba(255, 255, 255, 0.14),
-    inset -1px 0 1px rgba(255, 255, 255, 0.14),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.35),
-    inset -1px 0 0 rgba(0, 0, 0, 0.3),
-    0 14px 44px rgba(0, 0, 0, 0.45);
+    /* 顶缘受光线 + 底缘暗反光:厚玻璃的体积感 */
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.45),
+    inset -1px 0 0 rgba(0, 0, 0, 0.34),
+    /* 顶部内侧一片极淡泛光,模拟光在玻璃内散射 */
+    inset 0 30px 46px -34px rgba(255, 255, 255, 0.09),
+    0 18px 50px rgba(0, 0, 0, 0.52);
 }
 
 /* 斜向光泽:玻璃面上的一道光带(screen 混合让它像光而不是漆) */
@@ -435,8 +437,8 @@ html.glass .topbar::before {
 html.dark.glass .sidebar::before,
 html.dark.glass .topbar::before {
   background: linear-gradient(112deg,
-      rgba(255, 255, 255, 0.14) 0%,
-      rgba(255, 255, 255, 0.045) 28%,
+      rgba(255, 255, 255, 0.07) 0%,
+      rgba(255, 255, 255, 0.02) 28%,
       rgba(255, 255, 255, 0) 52%);
 }
 
@@ -448,6 +450,13 @@ html.dark.glass .topbar::before {
   html.glass .topbar {
     backdrop-filter: blur(30px) saturate(1.9) url("#glass-refract");
     -webkit-backdrop-filter: blur(30px) saturate(1.9) url("#glass-refract");
+  }
+
+  /* 深色玻璃不提亮背后(否则洗成灰白),只靠折射与饱和度出层次 */
+  html.dark.glass .sidebar,
+  html.dark.glass .topbar {
+    backdrop-filter: blur(36px) saturate(1.4) url("#glass-refract");
+    -webkit-backdrop-filter: blur(36px) saturate(1.4) url("#glass-refract");
   }
 }
 

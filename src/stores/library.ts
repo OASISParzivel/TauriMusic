@@ -1,4 +1,4 @@
-import { computed, shallowReactive } from "vue";
+import { computed, reactive, shallowReactive } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, type Playlist, type Track } from "../api";
@@ -81,6 +81,12 @@ function initLibraryListeners(): void {
   // 命令行/双击"打开方式"导入的失败清单(后端聚合)
   void listen<string>("import-error", (e) => {
     flashStatus(`导入失败: ${e.payload}`);
+  });
+
+  // TMCL 大包的写入进度(后端按资源数上报,驱动导出弹窗里的细进度条)
+  void listen<{ done: number; total: number }>("export-progress", (e) => {
+    exportState.assetDone = e.payload.done;
+    exportState.assetTotal = e.payload.total;
   });
 }
 
@@ -291,18 +297,134 @@ export async function importMusicPick(): Promise<void> {
   }
 }
 
-/** 把一首歌导出为 .tmc 音乐包(歌曲列表行内入口) */
-export async function exportTrackTmc(id: string, title: string, artist: string): Promise<void> {
-  const dest = await api.pickTmcDest(`${title} - ${artist}`);
-  if (!dest) return;
+/** 单首歌的导出描述(id + 展示名) */
+interface ExportItem {
+  id: string;
+  name: string;
+}
+
+/** 两阶段导出的阶段:packing 打包中 → ready 包裹就绪 → placing 落位中 → done 完成 */
+export type ExportPhase = "packing" | "ready" | "placing" | "done";
+
+/** 导出进度弹窗的实时状态(与设置/关于同款弹窗,由 ExportModal 渲染) */
+export const exportState = reactive({
+  open: false,
+  phase: "packing" as ExportPhase,
+  /** 来源标签(如「整张专辑」/「播放列表 · xxx」) */
+  label: "",
+  /** 包裹总数与已打包完成数 */
+  total: 0,
+  done: 0,
+  /** 当前正在打包的歌名 */
+  current: "",
+  /** 单个包裹内部进度(TMCL 大包由后端 export-progress 事件驱动) */
+  assetDone: 0,
+  assetTotal: 0,
+  /** 打包失败被跳过的数量 */
+  packFailed: 0,
+  /** 已打包好的暂存文件绝对路径 */
+  files: [] as string[],
+  stageDir: "",
+  /** 落位结果 */
+  placed: 0,
+  failed: 0,
+  err: "",
+});
+
+/** 统一两阶段导出:先全部打包到 Temp 暂存区(弹窗显示进度),
+ *  包裹就绪后由用户点「导出」选择位置,完整文件瞬间落位,目标路径不会出现半成品 */
+async function runExport(
+  label: string,
+  total: number,
+  pack: () => Promise<string[]>,
+): Promise<void> {
+  exportState.open = true;
+  exportState.phase = "packing";
+  exportState.label = label;
+  exportState.total = total;
+  exportState.done = 0;
+  exportState.current = "";
+  exportState.assetDone = 0;
+  exportState.assetTotal = 0;
+  exportState.packFailed = 0;
+  exportState.files = [];
+  exportState.stageDir = "";
+  exportState.placed = 0;
+  exportState.failed = 0;
+  exportState.err = "";
   try {
-    const real = await api.exportTmc(id, dest);
-    const name = real.split(/[\\/]/).pop() ?? real;
-    flashStatus(`已导出 ${name}`);
+    exportState.stageDir = await api.makeStageDir();
+    exportState.files = await pack();
+    // 弹窗已被用户取消:保持关闭,不进入就绪态
+    if (!exportState.open) return;
+    exportState.phase = "ready";
   } catch (err) {
-    console.error("导出 TMC 失败", err);
-    flashStatus("导出失败");
+    console.error("导出打包失败", err);
+    exportState.err = err instanceof Error ? err.message : String(err);
   }
+}
+
+/** 关闭导出弹窗:尚未导出的包裹连同暂存目录一并清理 */
+export function closeExport(): void {
+  if (exportState.stageDir && exportState.phase !== "done") {
+    void api.cleanupStage(exportState.stageDir);
+  }
+  exportState.open = false;
+}
+
+/** 弹窗内点「导出」:选目标文件夹,把暂存好的完整包裹瞬间落位 */
+export async function confirmExport(): Promise<void> {
+  if (exportState.phase !== "ready") return;
+  const dir = await api.pickExportDir();
+  if (!dir) return;
+  exportState.phase = "placing";
+  try {
+    const placed = await api.placeStaged(exportState.files, dir);
+    exportState.placed = placed.length;
+    exportState.failed = exportState.files.length - placed.length;
+  } catch (err) {
+    console.error("导出落位失败", err);
+    exportState.placed = 0;
+    exportState.failed = exportState.files.length;
+    exportState.err = err instanceof Error ? err.message : String(err);
+  }
+  void api.cleanupStage(exportState.stageDir);
+  exportState.phase = "done";
+  const prefix = exportState.label ? `${exportState.label} · ` : "";
+  flashStatus(
+    exportState.failed === 0
+      ? `${prefix}已导出 ${exportState.placed} 个音乐包`
+      : `${prefix}已导出 ${exportState.placed}/${exportState.files.length} 个(部分失败)`,
+  );
+}
+
+/** 把一批歌逐个打包进暂存区(每首一个 .tmc;单个失败跳过不中断) */
+function packTmcItems(items: ExportItem[]): Promise<string[]> {
+  return (async () => {
+    const files: string[] = [];
+    for (const it of items) {
+      // 弹窗被关闭:中止后续打包,并清掉在途打包可能重建的暂存目录
+      if (!exportState.open) {
+        void api.cleanupStage(exportState.stageDir);
+        return files;
+      }
+      exportState.current = it.name;
+      try {
+        files.push(await api.stageTmc(it.id, exportState.stageDir));
+      } catch (err) {
+        console.error("打包 TMC 失败", it.name, err);
+        exportState.packFailed++;
+      }
+      exportState.done++;
+    }
+    if (files.length === 0) throw new Error("所有包裹打包失败");
+    return files;
+  })();
+}
+
+/** 单首导出入口(列表行/右键):与其他导出一样走进度弹窗 */
+export async function exportTrackTmc(id: string, title: string, artist: string): Promise<void> {
+  await runExport("", 1, () => packTmcItems([{ id, name: `${title} - ${artist}` }]));
 }
 
 /** 批量导出多首歌为 .tmc 音乐包(多选操作条 / 专辑导出入口) */
@@ -312,27 +434,22 @@ export async function exportTracksTmc(
   label?: string,
 ): Promise<void> {
   if (ids.length === 0) return;
-  const dir = await api.pickExportDir();
-  if (!dir) return;
-  flashStatus(`正在导出 ${ids.length} 个音乐包…`);
-  let ok = 0;
-  for (const t of tracks) {
-    if (!ids.includes(t.id)) continue;
-    try {
-      await api.exportTmc(t.id, `${dir}\\${t.title} - ${t.artist}`);
-      ok++;
-      // 每首落位后刷新进度,状态条即导出进度
-      flashStatus(`正在导出音乐包 ${ok}/${ids.length}…`);
-    } catch (err) {
-      console.error("导出 TMC 失败", t.title, err);
-    }
-  }
-  const prefix = label ? `${label} · ` : "";
-  flashStatus(
-    ok === ids.length
-      ? `${prefix}已导出 ${ok} 个音乐包`
-      : `${prefix}已导出 ${ok}/${ids.length} 个(部分失败)`,
-  );
+  const items = tracks
+    .filter((t) => ids.includes(t.id))
+    .map((t) => ({ id: t.id, name: `${t.title} - ${t.artist}` }));
+  if (items.length === 0) return;
+  const text = label || (items.length > 1 ? `已选 ${items.length} 首` : "");
+  await runExport(text, items.length, () => packTmcItems(items));
+}
+
+/** 导出播放列表为 .tmcl:单个大包,写入进度由后端 export-progress 事件上报 */
+export async function exportPlaylistTmcl(playlistId: string, name: string): Promise<void> {
+  await runExport(`播放列表 · ${name}`, 1, async () => {
+    exportState.current = name;
+    const f = await api.stageTmcl(playlistId, exportState.stageDir);
+    exportState.done = 1;
+    return [f];
+  });
 }
 
 /** 通过网易云公开接口为整张专辑在线补全封面与歌词(仅元数据,播放仍走本地文件) */

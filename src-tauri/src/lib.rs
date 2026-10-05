@@ -186,6 +186,30 @@ fn place_archive(tmp: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 目标已存在时追加序号 name (2).ext / name (3).ext,保留扩展名
+fn dedup_dest(dest: PathBuf) -> PathBuf {
+    if !dest.exists() {
+        return dest;
+    }
+    let parent = dest.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let stem = dest
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".into());
+    let ext = dest
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let mut i = 2;
+    loop {
+        let candidate = parent.join(format!("{stem} ({i}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        i += 1;
+    }
+}
+
 /// 两个文件内容是否完全一致(仅在大小相同时调用才有意义)
 fn same_file_content(a: &Path, b: &Path) -> bool {
     use std::io::Read;
@@ -396,17 +420,47 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
     });
 }
 
-/// 把曲库中的一首歌打包导出为 .tmc
+/// 为一次导出创建 Temp 暂存目录:包裹先打包在这里,用户点「导出」后才落位到所选位置
 #[tauri::command]
-async fn export_tmc(id: String, dest: String, app: tauri::AppHandle) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || export_tmc_blocking(&id, &dest, &app))
+fn make_stage_dir() -> Result<String, String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("taurimusic-stage-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+/// 清理暂存目录(落位完成或用户取消后);只认应用自己的暂存目录名,防误删
+#[tauri::command]
+fn cleanup_stage(dir: String) {
+    let p = PathBuf::from(&dir);
+    let ours = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("taurimusic-stage-"))
+        .unwrap_or(false);
+    if ours {
+        let _ = fs::remove_dir_all(p);
+    }
+}
+
+/// 把曲库中的一首歌打包进导出暂存区(不落位),返回暂存文件路径
+#[tauri::command]
+async fn stage_tmc(id: String, staging: String, app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || stage_tmc_blocking(&id, Path::new(&staging), &app))
         .await
         .map_err(|e| e.to_string())?
 }
 
-fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<String, String> {
+fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Result<String, String> {
     use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
 
+    // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
+    if !staging.is_dir() {
+        return Err("导出已取消".into());
+    }
     let state = app.state::<AppState>();
     let track = {
         let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
@@ -425,10 +479,10 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
         .unwrap_or_else(|| "mp3".into());
     let stem = sanitize_name(&t.title);
 
-    // meta.json 与 7z 都先写在系统 Temp,打包完成后整体落位到用户指定路径
-    let tmp = std::env::temp_dir().join(format!("taurimusic-export-{}", std::process::id()));
-    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let meta_path = tmp.join("meta.json");
+    // meta.json 与 7z 都写在暂存区的工作子目录里,打包封口后移到暂存区顶层
+    let workspace = staging.join(".tmp");
+    fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
+    let meta_path = workspace.join("meta.json");
     let meta = serde_json::json!({
         "title": t.title,
         "artist": t.artist,
@@ -444,45 +498,8 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
     )
     .map_err(|e| e.to_string())?;
 
-    let mut dest_path = PathBuf::from(dest);
-    // 文件名清洗:标签可能含 \ / 等文件系统非法字符
-    if let Some(parent) = dest_path.parent() {
-        let stem = dest_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        dest_path = parent.join(sanitize_name(&stem));
-    }
-    if dest_path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase() != "tmc")
-        .unwrap_or(true)
-    {
-        dest_path.set_extension("tmc");
-    }
-    // 批量导出时同名(同标题)曲目自动加序号,避免相互覆盖
-    if dest_path.exists() {
-        let parent = dest_path.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let stem = dest_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "track".into());
-        let mut i = 2;
-        loop {
-            let candidate = parent.join(format!("{stem} ({i}).tmc"));
-            if !candidate.exists() {
-                dest_path = candidate;
-                break;
-            }
-            i += 1;
-        }
-    }
-    if let Some(parent) = dest_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    // 7z 先写入 Temp,打包封口后再落位,目标路径不会出现半成品
-    let tmp_archive = tmp.join(format!("{stem}.tmc"));
+    // 7z 先写入工作目录,打包封口后落进暂存区,用户目录不会出现半成品
+    let tmp_archive = workspace.join(format!("{stem}.tmc"));
     let _ = fs::remove_file(&tmp_archive);
     let mut writer =
         SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMC 失败: {e}"))?;
@@ -539,9 +556,11 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
         )
         .map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| format!("写入 TMC 失败: {e}"))?;
-    place_archive(&tmp_archive, &dest_path)?;
-    let _ = fs::remove_dir_all(&tmp);
-    Ok(dest_path.to_string_lossy().to_string())
+    // 同一批次里同标题的歌在暂存区内自动加序号,落位时再按目标目录去重
+    let staged = dedup_dest(staging.join(format!("{stem}.tmc")));
+    place_archive(&tmp_archive, &staged)?;
+    let _ = fs::remove_dir_all(&workspace);
+    Ok(staged.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -550,19 +569,6 @@ async fn pick_tmc_file() -> Option<String> {
         .set_title("选择音乐包(TMC / TMCL)")
         .add_filter("音乐包 (*.tmc, *.tmcl)", &["tmc", "tmcl"])
         .pick_file()
-        .await
-        .map(|f| f.path().to_string_lossy().to_string())
-}
-
-#[tauri::command]
-async fn pick_tmc_dest(default_name: String) -> Option<String> {
-    // 标签里的标题可能含 \ / 等文件系统非法字符,默认名先清洗
-    let name = sanitize_name(&default_name);
-    rfd::AsyncFileDialog::new()
-        .set_title("导出 TMC 音乐包")
-        .add_filter("TMC 音乐包 (*.tmc)", &["tmc"])
-        .set_file_name(format!("{name}.tmc"))
-        .save_file()
         .await
         .map(|f| f.path().to_string_lossy().to_string())
 }
@@ -593,6 +599,30 @@ async fn pick_export_dir() -> Option<String> {
         .pick_folder()
         .await
         .map(|f| f.path().to_string_lossy().to_string())
+}
+
+/// 把暂存好的完整包裹落位到用户目录:同名自动加序号,
+/// 单个失败不中断整批;返回实际落位路径(数量少于入参即有失败)。
+#[tauri::command]
+async fn place_staged(files: Vec<String>, dest_dir: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&dest_dir);
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let mut placed = Vec::new();
+        for f in &files {
+            let src = Path::new(f);
+            let Some(name) = src.file_name() else {
+                continue;
+            };
+            let dest = dedup_dest(dir.join(name));
+            if place_archive(src, &dest).is_ok() {
+                placed.push(dest.to_string_lossy().to_string());
+            }
+        }
+        Ok(placed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ===== 在线元数据补全(网易云公开接口,仅补封面/歌词,不涉及流媒体) =====
@@ -1216,38 +1246,31 @@ fn move_playlist_entry(
 
 // ===== TMCL 播放列表包(.tmcl = 标准 7z:音乐源文件 + 歌词 + 封面 + playlist.json) =====
 
+/// 把播放列表打包进导出暂存区(不落位),写入过程中按资源数上报 export-progress 事件
 #[tauri::command]
-async fn pick_tmcl_dest(default_name: String) -> Option<String> {
-    rfd::AsyncFileDialog::new()
-        .set_title("导出 TMCL 播放列表")
-        .add_filter("TMCL 播放列表 (*.tmcl)", &["tmcl"])
-        .set_file_name(format!("{default_name}.tmcl"))
-        .save_file()
-        .await
-        .map(|f| f.path().to_string_lossy().to_string())
-}
-
-/// 把播放列表打包为 .tmcl:每首一个子目录(音频+歌词+封面+meta.json)+ 根级 playlist.json
-#[tauri::command]
-async fn export_playlist_tmcl(
+async fn stage_tmcl(
     playlist_id: String,
-    dest: String,
+    staging: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        export_playlist_tmcl_blocking(&playlist_id, &dest, &app)
+        stage_tmcl_blocking(&playlist_id, Path::new(&staging), &app)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn export_playlist_tmcl_blocking(
+fn stage_tmcl_blocking(
     playlist_id: &str,
-    dest: &str,
+    staging: &Path,
     app: &tauri::AppHandle,
 ) -> Result<String, String> {
     use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
 
+    // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
+    if !staging.is_dir() {
+        return Err("导出已取消".into());
+    }
     let state = app.state::<AppState>();
     let (pl, tracks) = {
         let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
@@ -1275,13 +1298,9 @@ fn export_playlist_tmcl_blocking(
         return Err("播放列表为空或曲目文件均不可用".into());
     }
 
-    let tmp_root = std::env::temp_dir().join(format!(
-        "taurimusic-tmcl-{}-{}",
-        std::process::id(),
-        &pl.id[..pl.id.len().min(8)]
-    ));
-    let _ = fs::remove_dir_all(&tmp_root);
-    fs::create_dir_all(&tmp_root).map_err(|e| e.to_string())?;
+    let workspace = staging.join(".tmp");
+    let _ = fs::remove_dir_all(&workspace);
+    fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
 
     let mut manifest_tracks: Vec<serde_json::Value> = Vec::new();
     let mut assets: Vec<(String, PathBuf)> = Vec::new();
@@ -1329,7 +1348,7 @@ fn export_playlist_tmcl_blocking(
             }
         }
         // meta.json 供扫描器补齐无内嵌标签的文件;写在临时目录再随包
-        let meta_dir = tmp_root.join(format!("{i:02}"));
+        let meta_dir = workspace.join(format!("{i:02}"));
         fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
         let meta = serde_json::json!({
             "title": t.title,
@@ -1351,7 +1370,7 @@ fn export_playlist_tmcl_blocking(
         manifest_tracks.push(item);
     }
     if manifest_tracks.is_empty() {
-        let _ = fs::remove_dir_all(&tmp_root);
+        let _ = fs::remove_dir_all(&workspace);
         return Err("播放列表中没有可导出的文件".into());
     }
 
@@ -1362,7 +1381,7 @@ fn export_playlist_tmcl_blocking(
         "createdAt": pl.created_at,
         "tracks": manifest_tracks,
     });
-    let manifest_path = tmp_root.join("playlist.json");
+    let manifest_path = workspace.join("playlist.json");
     fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
@@ -1370,23 +1389,15 @@ fn export_playlist_tmcl_blocking(
     .map_err(|e| e.to_string())?;
     assets.insert(0, ("playlist.json".to_string(), manifest_path));
 
-    let mut dest_path = PathBuf::from(dest);
-    if dest_path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase() != "tmcl")
-        .unwrap_or(true)
-    {
-        dest_path.set_extension("tmcl");
-    }
-    if let Some(parent) = dest_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    // 7z 先写进临时目录,打包封口后再落位到用户指定路径
-    let tmp_archive = tmp_root.join("playlist.tmcl");
+    // 7z 写进暂存区工作目录,写入进度按资源数上报;封口后落进暂存区顶层
+    let tmp_archive = workspace.join("playlist.tmcl");
     let mut writer =
         SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
-    for (name, path) in &assets {
+    for (i, (name, path)) in assets.iter().enumerate() {
+        let _ = app.emit(
+            "export-progress",
+            serde_json::json!({ "done": i, "total": assets.len() }),
+        );
         let file =
             fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
         writer
@@ -1399,9 +1410,11 @@ fn export_playlist_tmcl_blocking(
     writer
         .finish()
         .map_err(|e| format!("写入 TMCL 失败: {e}"))?;
-    place_archive(&tmp_archive, &dest_path)?;
-    let _ = fs::remove_dir_all(&tmp_root);
-    Ok(dest_path.to_string_lossy().to_string())
+    // 包名取清洗后的列表名;与暂存区内已有文件重名时自动加序号
+    let staged = dedup_dest(staging.join(format!("{}.tmcl", sanitize_name(&pl.name))));
+    place_archive(&tmp_archive, &staged)?;
+    let _ = fs::remove_dir_all(&workspace);
+    Ok(staged.to_string_lossy().to_string())
 }
 
 /// 导入 .tmcl:解包到导入目录 → 补 meta.json → 扫描 → 建立播放列表,返回列表名
@@ -1867,11 +1880,14 @@ pub fn run() {
             open_import_dir,
             import_paths,
             import_tmc,
-            export_tmc,
             pick_tmc_file,
-            pick_tmc_dest,
             pick_audio_files,
             pick_export_dir,
+            make_stage_dir,
+            stage_tmc,
+            stage_tmcl,
+            place_staged,
+            cleanup_stage,
             netease_enrich_album,
             get_associations,
             set_association,
@@ -1882,8 +1898,6 @@ pub fn run() {
             add_tracks_to_playlist,
             remove_playlist_entry,
             move_playlist_entry,
-            pick_tmcl_dest,
-            export_playlist_tmcl,
             import_playlist_tmcl,
             get_resource_usage
         ])
@@ -1941,6 +1955,26 @@ mod tests {
         place_archive(&tmp2, &target.join("a.tmc")).unwrap();
         assert_eq!(fs::read(target.join("a.tmc")).unwrap(), b"archive-2");
         assert!(!tmp2.exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dedup_dest_appends_sequence() {
+        use super::dedup_dest;
+        let dir = std::env::temp_dir().join(format!("tm-dedupdest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // 不存在:原样返回
+        assert_eq!(dedup_dest(dir.join("song.tmc")), dir.join("song.tmc"));
+        // 已存在:追加序号,扩展名保留;新序号也存在时继续递增
+        fs::write(dir.join("song.tmc"), b"a").unwrap();
+        assert_eq!(dedup_dest(dir.join("song.tmc")), dir.join("song (2).tmc"));
+        fs::write(dir.join("song (2).tmc"), b"b").unwrap();
+        assert_eq!(dedup_dest(dir.join("song.tmc")), dir.join("song (3).tmc"));
+        // 不同扩展名互不干扰
+        fs::write(dir.join("song.tmcl"), b"c").unwrap();
+        assert_eq!(dedup_dest(dir.join("song.tmcl")), dir.join("song (2).tmcl"));
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -1,6 +1,6 @@
 import { computed, reactive } from "vue";
 import { api, type Playlist, type PlaylistEntry, type Track } from "../api";
-import { lib, flashStatus } from "./library";
+import { exportPlaylistTmcl, lib, flashStatus } from "./library";
 import { openPlaylist, ui } from "./ui";
 import { openCtx } from "./context";
 
@@ -189,17 +189,7 @@ export function openPlaylistMenu(e: MouseEvent, p: Playlist): void {
   ]);
 }
 
-/** 导出为 .tmcl(7z:音乐源文件 + 歌词 + 封面 + playlist.json) */
+/** 导出为 .tmcl(7z:音乐源文件 + 歌词 + 封面 + playlist.json):走两阶段导出弹窗 */
 export async function exportPlaylist(p: Playlist): Promise<void> {
-  const dest = await api.pickTmclDest(p.name);
-  if (!dest) return;
-  flashStatus(`正在导出「${p.name}」…`);
-  try {
-    const real = await api.exportPlaylistTmcl(p.id, dest);
-    const file = real.split(/[\\/]/).pop() ?? real;
-    flashStatus(`已导出 ${file}`);
-  } catch (err) {
-    console.error("导出 TMCL 失败", err);
-    flashStatus(`导出失败: ${String(err)}`);
-  }
+  await exportPlaylistTmcl(p.id, p.name);
 }
