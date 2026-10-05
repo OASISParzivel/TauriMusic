@@ -171,6 +171,21 @@ fn is_under(child: &str, dir: &str) -> bool {
     matched > 0
 }
 
+/// 把打包完成的临时压缩包落位到用户指定路径。
+/// 打包期间目标路径不存在文件,用户不会拷到半成品;
+/// 同盘 rename 原子直达,跨盘(系统 Temp 与目标不同卷)退化为拷贝,源是完整封口的包。
+fn place_archive(tmp: &Path, dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::rename(tmp, dest).is_ok() {
+        return Ok(());
+    }
+    fs::copy(tmp, dest).map_err(|e| format!("落位到 {} 失败: {e}", dest.display()))?;
+    let _ = fs::remove_file(tmp);
+    Ok(())
+}
+
 /// 两个文件内容是否完全一致(仅在大小相同时调用才有意义)
 fn same_file_content(a: &Path, b: &Path) -> bool {
     use std::io::Read;
@@ -410,7 +425,7 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
         .unwrap_or_else(|| "mp3".into());
     let stem = sanitize_name(&t.title);
 
-    // meta.json 先落盘,再随音频/歌词/封面一起打包
+    // meta.json 与 7z 都先写在系统 Temp,打包完成后整体落位到用户指定路径
     let tmp = std::env::temp_dir().join(format!("taurimusic-export-{}", std::process::id()));
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let meta_path = tmp.join("meta.json");
@@ -466,7 +481,11 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
         let _ = fs::create_dir_all(parent);
     }
 
-    let mut writer = SevenZWriter::create(&dest_path).map_err(|e| format!("创建 TMC 失败: {e}"))?;
+    // 7z 先写入 Temp,打包封口后再落位,目标路径不会出现半成品
+    let tmp_archive = tmp.join(format!("{stem}.tmc"));
+    let _ = fs::remove_file(&tmp_archive);
+    let mut writer =
+        SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMC 失败: {e}"))?;
     // 打开失败必须报错:SevenZWriter 收到 None reader 会静默写入 size=0 的空条目,
     // 产出损坏的 .tmc(典型场景:音频正被播放器占用)
     let audio_file =
@@ -520,7 +539,8 @@ fn export_tmc_blocking(id: &str, dest: &str, app: &tauri::AppHandle) -> Result<S
         )
         .map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| format!("写入 TMC 失败: {e}"))?;
-    let _ = fs::remove_file(&meta_path);
+    place_archive(&tmp_archive, &dest_path)?;
+    let _ = fs::remove_dir_all(&tmp);
     Ok(dest_path.to_string_lossy().to_string())
 }
 
@@ -1362,8 +1382,10 @@ fn export_playlist_tmcl_blocking(
         let _ = fs::create_dir_all(parent);
     }
 
+    // 7z 先写进临时目录,打包封口后再落位到用户指定路径
+    let tmp_archive = tmp_root.join("playlist.tmcl");
     let mut writer =
-        SevenZWriter::create(&dest_path).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
+        SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
     for (name, path) in &assets {
         let file =
             fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
@@ -1377,6 +1399,7 @@ fn export_playlist_tmcl_blocking(
     writer
         .finish()
         .map_err(|e| format!("写入 TMCL 失败: {e}"))?;
+    place_archive(&tmp_archive, &dest_path)?;
     let _ = fs::remove_dir_all(&tmp_root);
     Ok(dest_path.to_string_lossy().to_string())
 }
@@ -1871,8 +1894,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        artist_matches, copy_into_import_dir, is_under, name_matches, same_file_content,
-        sanitize_name, CopyResult,
+        artist_matches, copy_into_import_dir, is_under, name_matches, place_archive,
+        same_file_content, sanitize_name, CopyResult,
     };
     use std::fs;
 
@@ -1894,6 +1917,31 @@ mod tests {
         assert!(is_under(r"f:\MUSIC\a.mp3", r"F:\music"));
         #[cfg(not(windows))]
         assert!(!is_under(r"f:\MUSIC\a.mp3", r"F:\music"));
+    }
+
+    #[test]
+    fn place_archive_moves_tmp_into_place() {
+        let dir = std::env::temp_dir().join(format!("tm-place-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let stage = dir.join("stage");
+        let target = dir.join("target");
+        fs::create_dir_all(&stage).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        // 常规:临时包落位(同盘 rename),临时文件消失
+        let tmp1 = stage.join("a.tmc");
+        fs::write(&tmp1, b"archive-1").unwrap();
+        place_archive(&tmp1, &target.join("a.tmc")).unwrap();
+        assert!(target.join("a.tmc").is_file());
+        assert!(!tmp1.exists());
+
+        // 目标已存在:rename 失败自动退化为拷贝覆盖(单文件 TMCL 用户确认覆盖的场景)
+        let tmp2 = stage.join("a.tmc");
+        fs::write(&tmp2, b"archive-2").unwrap();
+        place_archive(&tmp2, &target.join("a.tmc")).unwrap();
+        assert_eq!(fs::read(target.join("a.tmc")).unwrap(), b"archive-2");
+        assert!(!tmp2.exists());
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

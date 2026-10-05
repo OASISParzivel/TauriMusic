@@ -321,6 +321,8 @@ export async function exportTracksTmc(
     try {
       await api.exportTmc(t.id, `${dir}\\${t.title} - ${t.artist}`);
       ok++;
+      // 每首落位后刷新进度,状态条即导出进度
+      flashStatus(`正在导出音乐包 ${ok}/${ids.length}…`);
     } catch (err) {
       console.error("导出 TMC 失败", t.title, err);
     }
