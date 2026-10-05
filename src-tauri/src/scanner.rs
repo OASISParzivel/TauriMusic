@@ -1,5 +1,5 @@
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -37,9 +37,15 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
         .scan_gate
         .try_lock()
         .map_err(|_| "已有扫描正在进行,请稍后再试".to_string())?;
-    let (folders, existing, prev_version) = {
+    // 旧曲库只在这里克隆成 path 索引:扫描全程不再持有第二份全量记录
+    let (folders, mut by_path, prev_version) = {
         let lib = state.lib.lock().map_err(|_| "曲库状态不可用".to_string())?;
-        (lib.folders.clone(), lib.tracks.clone(), lib.version)
+        let by_path = lib
+            .tracks
+            .iter()
+            .map(|t| (t.path.clone(), t.clone()))
+            .collect::<HashMap<String, Track>>();
+        (lib.folders.clone(), by_path, lib.version)
     };
     // 曲库格式版本不匹配时放弃全部增量复用,重新解析每个文件
     let force_full = prev_version != SCAN_VERSION;
@@ -48,11 +54,6 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64();
-    let by_path: HashMap<String, Track> = existing
-        .iter()
-        .map(|t| (t.path.clone(), t.clone()))
-        .collect();
-
     // 先收集文件清单(快),再逐个解析并上报进度。
     // 根条目放行(filter_entry 也会收到遍历根本身),否则登记点开头目录(如 X:\.music)会静默扫空
     let mut files: Vec<PathBuf> = Vec::new();
@@ -196,18 +197,18 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
     for chunk in chunk_results {
         result.extend(chunk);
     }
-    let mut seen: HashSet<String> = HashSet::with_capacity(result.len());
+    // 本次扫到的路径从索引里移除:剩下的就是被移除的曲目,
+    // 省掉一份全量 seen 集合与对旧曲库的二次遍历
     let mut added = 0usize;
     let mut updated = 0usize;
     for t in &result {
-        seen.insert(t.path.clone());
-        if by_path.contains_key(&t.path) {
+        if by_path.remove(&t.path).is_some() {
             updated += 1;
         } else {
             added += 1;
         }
     }
-    let removed = existing.iter().filter(|t| !seen.contains(&t.path)).count();
+    let removed = by_path.len();
     let report = ScanReport {
         added,
         updated,
