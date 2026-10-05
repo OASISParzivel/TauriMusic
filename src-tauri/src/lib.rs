@@ -686,13 +686,21 @@ fn netease_enrich_blocking(
         skipped: 0,
     };
 
-    // 封面:存在无封面曲目时才匹配(网易云搜专辑图 → 搜歌曲图 → iTunes 兜底)
+    // 封面:存在无封面曲目时才匹配(网易云 → iTunes → 酷我 三级兜底)
     if tracks.iter().any(|t| t.cover.is_none()) {
         let first = &tracks[0];
         let pic_url = netease_album_cover(&client, &first.album, &first.album_artist, &first.title)
-            .or_else(|| itunes_album_cover(&first.album, &first.album_artist));
+            .or_else(|| itunes_album_cover(&first.album, &first.album_artist))
+            .or_else(|| {
+                kuwo_album_cover(
+                    &generic_client(),
+                    &first.title,
+                    &first.album_artist,
+                    Some(first.duration),
+                )
+            });
         match pic_url {
-            Some(pic_url) => match client.get(&pic_url).send() {
+            Some(pic_url) => match generic_client().get(&pic_url).send() {
                 Ok(resp) if resp.status().is_success() => match resp.bytes() {
                     Ok(bytes) => {
                         let mut dirs: Vec<PathBuf> = tracks
@@ -1343,6 +1351,87 @@ pub fn kuwo_lyric(
     let v: serde_json::Value = resp.json().ok()?;
     let lines = v["data"]["lrclist"].as_array()?;
     build_lrc_from_kuwo(lines)
+}
+
+/// 酷我封面兜底:网易云与 iTunes 都没有时(抖音神曲/新歌常见),从酷我取官方专辑封面。
+/// 搜索「歌名 艺人」选曲后从 songinfo.pic 取图并升级为 900 高清;
+/// 本地标签艺人常有错字(如「泛国同学」vs「泽国同学」),艺人全对不上时
+/// 只有时长 ±2s 吻合才敢要,防止拿到同名的别家封面
+pub fn kuwo_album_cover(
+    client: &reqwest::blocking::Client,
+    title: &str,
+    artist: &str,
+    duration: Option<f64>,
+) -> Option<String> {
+    let resp = client
+        .get("http://search.kuwo.cn/r.s")
+        .query(&[
+            ("all", format!("{title} {artist}")),
+            ("ft", "music".to_string()),
+            ("itemset", "web_2013".to_string()),
+            ("client", "mp".to_string()),
+            ("pn", "0".to_string()),
+            ("rn", "10".to_string()),
+            ("rformat", "json".to_string()),
+            ("encoding", "utf8".to_string()),
+            ("vipver", "MUSIC_8.0.3.2_QQZS".to_string()),
+        ])
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let raw = resp.text().ok()?;
+    let v: serde_json::Value = serde_json::from_str(&kuwo_fix_json(&raw)).ok()?;
+    let list = v["abslist"].as_array()?;
+    let parse_dur = |s: &serde_json::Value| {
+        s["DURATION"]
+            .as_str()
+            .and_then(|d| d.trim().parse::<f64>().ok())
+    };
+    let matched: Vec<&serde_json::Value> = list
+        .iter()
+        .filter(|s| {
+            s["ARTIST"]
+                .as_str()
+                .map(|n| artist_matches(artist, &html_unescape(n)))
+                .unwrap_or(false)
+        })
+        .collect();
+    let pick = if !matched.is_empty() {
+        matched
+            .iter()
+            .copied()
+            .find(|s| match (duration, parse_dur(s)) {
+                (Some(d), Some(k)) => (d - k).abs() <= 5.0,
+                _ => false,
+            })
+            .unwrap_or(matched[0])
+    } else {
+        duration.and_then(|d| {
+            list.iter()
+                .find(|s| parse_dur(s).map(|k| (d - k).abs() <= 2.0).unwrap_or(false))
+        })?
+    };
+    let rid = pick["MUSICRID"].as_str()?.trim_start_matches("MUSIC_");
+
+    // 歌曲详情(需 m 站 Referer):songinfo.pic 即官方专辑封面,路径里的 240 可升为 900 高清
+    let resp = client
+        .get("http://m.kuwo.cn/newh5/singles/songinfoandlrc")
+        .query(&[("musicId", rid)])
+        .header(
+            reqwest::header::REFERER,
+            "https://m.kuwo.cn/newh5/singles/songinfoandlrc",
+        )
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().ok()?;
+    v["data"]["songinfo"]["pic"]
+        .as_str()
+        .map(|s| s.replace("/albumcover/240/", "/albumcover/900/"))
 }
 
 // ===== 格式关联(HKCU 注册到"打开方式",无需管理员) =====
