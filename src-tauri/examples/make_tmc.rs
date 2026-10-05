@@ -19,7 +19,7 @@ use lofty::file::AudioFile;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
 use lofty::tag::{ItemKey, ItemValue, Tag, TagItem, TagType};
-use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
 use std::path::Path;
 
 fn main() {
@@ -29,7 +29,7 @@ fn main() {
         let src = Path::new(&args[2]);
         let dest = Path::new(&args[3]);
         std::fs::create_dir_all(dest).expect("创建目标目录失败");
-        sevenz_rust::decompress_file(src, dest).expect("解包失败");
+        sevenz_rust2::decompress_file(src, dest).expect("解包失败");
         println!("已解包 {} -> {}", src.display(), dest.display());
         return;
     }
@@ -163,7 +163,7 @@ fn build(
 }
 
 fn pack(dest: &Path, work: &Path) {
-    let mut writer = SevenZWriter::create(dest).expect("创建 TMC 失败");
+    let mut writer = ArchiveWriter::create(dest).expect("创建 TMC 失败");
     let mut entries: Vec<_> = std::fs::read_dir(work)
         .expect("读工作目录失败")
         .filter_map(|e| e.ok())
@@ -174,7 +174,7 @@ fn pack(dest: &Path, work: &Path) {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         writer
             .push_archive_entry(
-                SevenZArchiveEntry::from_path(&p, name),
+                ArchiveEntry::from_path(&p, name),
                 std::fs::File::open(&p).ok(),
             )
             .expect("打包条目失败");

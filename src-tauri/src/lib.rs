@@ -44,9 +44,22 @@ pub(crate) const LIBRARY_FILE: &str = "library.json";
 /// 扫描器会把顶层散装音频按「艺人\专辑」归位到该目录下
 pub(crate) const IMPORT_DIR_NAME: &str = "Music";
 
+/// 收紧 asset 协议面:只放行封面缓存与已登记曲库文件夹下的文件。
+/// tauri.conf.json 的静态 `**` 范围已移除,未登记路径无法经 asset: 访问,
+/// 被投毒的前端无法再借封面/音频通道探测任意本地文件。
+fn refresh_asset_scope(app: &tauri::AppHandle) {
+    let scope = app.asset_protocol_scope();
+    let _ = scope.allow_directory(app.state::<AppState>().cache_dir.join("covers"), true);
+    if let Ok(lib) = app.state::<AppState>().lib.lock() {
+        for folder in &lib.folders {
+            let _ = scope.allow_directory(folder, true);
+        }
+    }
+}
+
 /// 确保导入目录存在,并把它登记进曲库扫描来源。
 /// 先落盘成功再改内存,落盘失败时内存态不发生变化。
-fn ensure_import_dir(state: &AppState) -> Result<PathBuf, String> {
+fn ensure_import_dir(app: &tauri::AppHandle, state: &AppState) -> Result<PathBuf, String> {
     let dir = state.data_dir.join(IMPORT_DIR_NAME);
     fs::create_dir_all(&dir).map_err(|e| format!("创建导入目录失败: {e}"))?;
     let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
@@ -57,18 +70,20 @@ fn ensure_import_dir(state: &AppState) -> Result<PathBuf, String> {
             lib.folders.pop();
             return Err(e.to_string());
         }
+        refresh_asset_scope(app);
     }
     Ok(dir)
 }
 
 #[tauri::command]
-fn get_import_dir(state: State<AppState>) -> Result<String, String> {
-    ensure_import_dir(&state).map(|p| p.to_string_lossy().into_owned())
+fn get_import_dir(app: tauri::AppHandle, state: State<AppState>) -> Result<String, String> {
+    let dir = ensure_import_dir(&app, &state)?;
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
-fn open_import_dir(state: State<AppState>) -> Result<String, String> {
-    let dir = ensure_import_dir(&state)?;
+fn open_import_dir(app: tauri::AppHandle, state: State<AppState>) -> Result<String, String> {
+    let dir = ensure_import_dir(&app, &state)?;
     std::process::Command::new("explorer")
         .arg(&dir)
         .spawn()
@@ -102,7 +117,7 @@ async fn import_paths(paths: Vec<String>, app: tauri::AppHandle) -> Result<Impor
 
 fn import_paths_blocking(paths: &[String], app: &tauri::AppHandle) -> Result<ImportReport, String> {
     let state = app.state::<AppState>();
-    let import_dir = ensure_import_dir(&state)?;
+    let import_dir = ensure_import_dir(app, &state)?;
     let mut report = ImportReport {
         folders_added: 0,
         files_copied: 0,
@@ -141,6 +156,9 @@ fn import_paths_blocking(paths: &[String], app: &tauri::AppHandle) -> Result<Imp
     }
     lib.save(&state.data_dir.join(LIBRARY_FILE))
         .map_err(|e| e.to_string())?;
+    if report.folders_added > 0 {
+        refresh_asset_scope(app);
+    }
     Ok(report)
 }
 
@@ -301,7 +319,9 @@ pub(crate) fn sanitize_name(s: &str) -> String {
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
         "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
-    if RESERVED.contains(&t.to_ascii_uppercase().as_str()) {
+    // Windows 保留设备名对「主名」生效:CON.mp3 与 CON 一样不可用
+    let base = t.split('.').next().unwrap_or_default();
+    if RESERVED.contains(&base.to_ascii_uppercase().as_str()) {
         t.insert(0, '_');
     }
     if t.is_empty() {
@@ -314,19 +334,17 @@ pub(crate) fn sanitize_name(s: &str) -> String {
 /// 解包 .tmc 到导入目录下的同名子目录,由扫描器拾取(meta.json 会补齐缺失标签)
 #[tauri::command]
 async fn import_tmc(path: String, app: tauri::AppHandle) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        import_tmc_file(Path::new(&path), &state)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || import_tmc_file(Path::new(&path), &app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
-fn import_tmc_file(src: &Path, state: &AppState) -> Result<String, String> {
+fn import_tmc_file(src: &Path, app: &tauri::AppHandle) -> Result<String, String> {
     if !src.is_file() {
         return Err("文件不存在".into());
     }
-    let import_dir = ensure_import_dir(state)?;
+    let state = app.state::<AppState>();
+    let import_dir = ensure_import_dir(app, &state)?;
     let stem = src
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -336,7 +354,7 @@ fn import_tmc_file(src: &Path, state: &AppState) -> Result<String, String> {
         fs::remove_dir_all(&dest).map_err(|e| format!("清理旧目录失败: {e}"))?;
     }
     fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
-    sevenz_rust::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
+    sevenz_rust2::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
     Ok(dest.to_string_lossy().to_string())
 }
 
@@ -356,7 +374,7 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
         // 7z 解压 + 全量扫描都是重活,放阻塞线程池,避免卡 tokio worker
         let worker = tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
-            let import_dir = match ensure_import_dir(&state) {
+            let import_dir = match ensure_import_dir(&app, &state) {
                 Ok(d) => d,
                 Err(e) => {
                     let _ = app.emit("import-error", format!("导入目录不可用: {e}"));
@@ -384,7 +402,7 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| p.to_string_lossy().to_string());
                 let result = if ext == "tmc" {
-                    import_tmc_file(p, &state).map(|_| ())
+                    import_tmc_file(p, &app).map(|_| ())
                 } else if ext == "tmcl" {
                     import_playlist_tmcl_blocking(&p.to_string_lossy(), &app).map(|_| ())
                 } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
@@ -456,9 +474,8 @@ async fn stage_tmc(id: String, staging: String, app: tauri::AppHandle) -> Result
 }
 
 fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Result<String, String> {
-    use sevenz_rust::{
-        MethodOptions, SevenZArchiveEntry, SevenZMethod, SevenZMethodConfiguration, SevenZWriter,
-    };
+    use sevenz_rust2::encoder_options::{EncoderOptions, Lzma2Options};
+    use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod};
 
     // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
     if !staging.is_dir() {
@@ -505,18 +522,21 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
     let tmp_archive = workspace.join(format!("{stem}.tmc"));
     let _ = fs::remove_file(&tmp_archive);
     let mut writer =
-        SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMC 失败: {e}"))?;
+        ArchiveWriter::create(&tmp_archive).map_err(|e| format!("创建 TMC 失败: {e}"))?;
     // 音频本身已是压缩格式,LZMA2 默认 8MiB 字典对它几乎无收益纯烧 CPU:
     // 字典降到 1MiB 导出明显提速、编码器更省内存;标准 7z 方法,解包兼容性不变
-    writer.set_content_methods(vec![SevenZMethodConfiguration::new(SevenZMethod::LZMA2)
-        .with_options(MethodOptions::Num(1 << 20))]);
+    let mut lzma2 = Lzma2Options::default();
+    lzma2.set_dictionary_size(1 << 20);
+    writer
+        .set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::LZMA2)
+            .with_options(EncoderOptions::Lzma2(lzma2))]);
     // 打开失败必须报错:SevenZWriter 收到 None reader 会静默写入 size=0 的空条目,
     // 产出损坏的 .tmc(典型场景:音频正被播放器占用)
     let audio_file =
         fs::File::open(audio).map_err(|e| format!("打开音频失败 {}: {e}", audio.display()))?;
     writer
         .push_archive_entry(
-            SevenZArchiveEntry::from_path(audio, format!("{stem}.{ext}")),
+            ArchiveEntry::from_path(audio, format!("{stem}.{ext}")),
             Some(audio_file),
         )
         .map_err(|e| e.to_string())?;
@@ -527,7 +547,7 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
                 .map_err(|e| format!("打开歌词失败 {}: {e}", lrc_path.display()))?;
             writer
                 .push_archive_entry(
-                    SevenZArchiveEntry::from_path(lrc_path, format!("{stem}.lrc")),
+                    ArchiveEntry::from_path(lrc_path, format!("{stem}.lrc")),
                     Some(lrc_file),
                 )
                 .map_err(|e| e.to_string())?;
@@ -549,7 +569,7 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
                 .map_err(|e| format!("打开封面失败 {}: {e}", cover_path.display()))?;
             writer
                 .push_archive_entry(
-                    SevenZArchiveEntry::from_path(cover_path, cname.to_string()),
+                    ArchiveEntry::from_path(cover_path, cname.to_string()),
                     Some(cover_file),
                 )
                 .map_err(|e| e.to_string())?;
@@ -558,7 +578,7 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
     let meta_file = fs::File::open(&meta_path).map_err(|e| format!("打开临时元数据失败: {e}"))?;
     writer
         .push_archive_entry(
-            SevenZArchiveEntry::from_path(&meta_path, "meta.json".to_string()),
+            ArchiveEntry::from_path(&meta_path, "meta.json".to_string()),
             Some(meta_file),
         )
         .map_err(|e| e.to_string())?;
@@ -707,67 +727,60 @@ fn netease_enrich_blocking(
                 )
             });
         match pic_url {
-            Some(pic_url) => match generic_client().get(&pic_url).send() {
-                Ok(resp) if resp.status().is_success() => match resp.bytes() {
-                    Ok(bytes) => {
-                        let mut dirs: Vec<PathBuf> = tracks
-                            .iter()
-                            .filter(|t| t.cover.is_none())
-                            .filter_map(|t| Path::new(&t.path).parent().map(|p| p.to_path_buf()))
-                            .collect();
-                        dirs.sort();
-                        dirs.dedup();
-                        // 混居目录(同一目录里还有其他专辑的曲目)不能写共享 cover.jpg,
-                        // 否则目录里所有专辑都会套上同一张封面
-                        let multi_dirs: std::collections::HashSet<PathBuf> = {
-                            let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
-                            dirs.iter()
-                                .filter(|d| {
-                                    let mut seen = std::collections::HashSet::new();
-                                    for t in &lib.tracks {
-                                        if Path::new(&t.path)
-                                            .parent()
-                                            .map(|p| p == **d)
-                                            .unwrap_or(false)
-                                        {
-                                            seen.insert(format!(
-                                                "{}\u{1}{}",
-                                                t.album_artist, t.album
-                                            ));
-                                        }
-                                    }
-                                    seen.len() > 1
-                                })
-                                .cloned()
-                                .collect()
-                        };
-                        for d in &dirs {
-                            if multi_dirs.contains(d) {
-                                // 写曲目专属旁路封面:{歌名}.cover.jpg
-                                for t in tracks.iter().filter(|t| t.cover.is_none()) {
-                                    let tp = Path::new(&t.path);
-                                    if tp.parent().map(|p| p == d.as_path()).unwrap_or(false) {
-                                        let stem = tp
-                                            .file_stem()
-                                            .map(|s| s.to_string_lossy().to_string())
-                                            .unwrap_or_default();
-                                        let _ =
-                                            fs::write(d.join(format!("{stem}.cover.jpg")), &bytes);
+            Some(pic_url) => match fetch_capped(&generic_client(), &pic_url) {
+                Some(bytes) => {
+                    let mut dirs: Vec<PathBuf> = tracks
+                        .iter()
+                        .filter(|t| t.cover.is_none())
+                        .filter_map(|t| Path::new(&t.path).parent().map(|p| p.to_path_buf()))
+                        .collect();
+                    dirs.sort();
+                    dirs.dedup();
+                    // 混居目录(同一目录里还有其他专辑的曲目)不能写共享 cover.jpg,
+                    // 否则目录里所有专辑都会套上同一张封面
+                    let multi_dirs: std::collections::HashSet<PathBuf> = {
+                        let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+                        dirs.iter()
+                            .filter(|d| {
+                                let mut seen = std::collections::HashSet::new();
+                                for t in &lib.tracks {
+                                    if Path::new(&t.path)
+                                        .parent()
+                                        .map(|p| p == **d)
+                                        .unwrap_or(false)
+                                    {
+                                        seen.insert(format!("{}\u{1}{}", t.album_artist, t.album));
                                     }
                                 }
-                            } else {
-                                let _ = fs::write(d.join("cover.jpg"), &bytes);
+                                seen.len() > 1
+                            })
+                            .cloned()
+                            .collect()
+                    };
+                    for d in &dirs {
+                        if multi_dirs.contains(d) {
+                            // 写曲目专属旁路封面:{歌名}.cover.jpg
+                            for t in tracks.iter().filter(|t| t.cover.is_none()) {
+                                let tp = Path::new(&t.path);
+                                if tp.parent().map(|p| p == d.as_path()).unwrap_or(false) {
+                                    let stem = tp
+                                        .file_stem()
+                                        .map(|s| s.to_string_lossy().to_string())
+                                        .unwrap_or_default();
+                                    let _ = fs::write(d.join(format!("{stem}.cover.jpg")), &bytes);
+                                }
                             }
+                        } else {
+                            let _ = fs::write(d.join("cover.jpg"), &bytes);
                         }
-                        // 让该专辑所有无封面曲目在增量扫描中被重新解析
-                        for t in tracks.iter().filter(|t| t.cover.is_none()) {
-                            touch_audio(Path::new(&t.path));
-                        }
-                        report.cover = true;
                     }
-                    Err(_) => report.skipped += 1,
-                },
-                _ => report.skipped += 1,
+                    // 让该专辑所有无封面曲目在增量扫描中被重新解析
+                    for t in tracks.iter().filter(|t| t.cover.is_none()) {
+                        touch_audio(Path::new(&t.path));
+                    }
+                    report.cover = true;
+                }
+                None => report.skipped += 1,
             },
             None => report.skipped += 1,
         }
@@ -841,6 +854,31 @@ fn netease_enrich_blocking(
         }
     }
     Ok(report)
+}
+
+/// 封面图片大小上限:URL 来自外部接口的 JSON,不能无限下载落盘
+const COVER_MAX_BYTES: u64 = 20 * 1024 * 1024;
+
+/// 下载封面:仅接受 https(网易云/iTunes/酷我的图源都可走 https),且不超过大小上限。
+/// resp.take 限读防 Content-Length 谎报
+fn fetch_capped(client: &reqwest::blocking::Client, url: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !url.starts_with("https://") {
+        return None;
+    }
+    let resp = client.get(url).send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    if resp
+        .content_length()
+        .is_some_and(|len| len > COVER_MAX_BYTES)
+    {
+        return None;
+    }
+    let mut buf = Vec::new();
+    resp.take(COVER_MAX_BYTES + 1).read_to_end(&mut buf).ok()?;
+    (buf.len() as u64 <= COVER_MAX_BYTES).then_some(buf)
 }
 
 pub fn netease_client() -> reqwest::blocking::Client {
@@ -1316,7 +1354,7 @@ fn kuwo_search(
     keyword: &str,
 ) -> Option<Vec<serde_json::Value>> {
     let resp = client
-        .get("http://search.kuwo.cn/r.s")
+        .get("https://search.kuwo.cn/r.s")
         .query(&[
             ("all", keyword.to_string()),
             ("ft", "music".to_string()),
@@ -1341,7 +1379,7 @@ fn kuwo_search(
 /// 酷我歌曲详情(必须带 m 站 Referer,否则报「音乐查询失败」):返回 data 节点
 fn kuwo_song_detail(client: &reqwest::blocking::Client, rid: &str) -> Option<serde_json::Value> {
     let resp = client
-        .get("http://m.kuwo.cn/newh5/singles/songinfoandlrc")
+        .get("https://m.kuwo.cn/newh5/singles/songinfoandlrc")
         .query(&[("musicId", rid)])
         .header(
             reqwest::header::REFERER,
@@ -1462,7 +1500,11 @@ pub fn kuwo_album_cover(
             continue;
         };
         if let Some(pic) = data["songinfo"]["pic"].as_str() {
-            return Some(pic.replace("/albumcover/240/", "/albumcover/900/"));
+            // 图床同样升级 https:明文通道的图片可被中间人替换
+            return Some(
+                pic.replace("http://", "https://")
+                    .replace("/albumcover/240/", "/albumcover/900/"),
+            );
         }
     }
     None
@@ -1779,9 +1821,8 @@ fn stage_tmcl_blocking(
     staging: &Path,
     app: &tauri::AppHandle,
 ) -> Result<String, String> {
-    use sevenz_rust::{
-        MethodOptions, SevenZArchiveEntry, SevenZMethod, SevenZMethodConfiguration, SevenZWriter,
-    };
+    use sevenz_rust2::encoder_options::{EncoderOptions, Lzma2Options};
+    use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod};
 
     // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
     if !staging.is_dir() {
@@ -1908,11 +1949,14 @@ fn stage_tmcl_blocking(
     // 7z 写进暂存区工作目录,写入进度按资源数上报;封口后落进暂存区顶层
     let tmp_archive = workspace.join("playlist.tmcl");
     let mut writer =
-        SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
+        ArchiveWriter::create(&tmp_archive).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
     // 音频本身已是压缩格式,LZMA2 默认 8MiB 字典对它几乎无收益纯烧 CPU:
     // 字典降到 1MiB 导出明显提速、编码器更省内存;标准 7z 方法,解包兼容性不变
-    writer.set_content_methods(vec![SevenZMethodConfiguration::new(SevenZMethod::LZMA2)
-        .with_options(MethodOptions::Num(1 << 20))]);
+    let mut lzma2 = Lzma2Options::default();
+    lzma2.set_dictionary_size(1 << 20);
+    writer
+        .set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::LZMA2)
+            .with_options(EncoderOptions::Lzma2(lzma2))]);
     for (i, (name, path)) in assets.iter().enumerate() {
         let _ = app.emit(
             "export-progress",
@@ -1921,10 +1965,7 @@ fn stage_tmcl_blocking(
         let file =
             fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
         writer
-            .push_archive_entry(
-                SevenZArchiveEntry::from_path(path, name.clone()),
-                Some(file),
-            )
+            .push_archive_entry(ArchiveEntry::from_path(path, name.clone()), Some(file))
             .map_err(|e| e.to_string())?;
     }
     writer
@@ -1951,6 +1992,23 @@ fn norm_path(p: &str) -> String {
     p.replace('/', "\\").to_lowercase()
 }
 
+/// 校验 TMCL manifest 里的相对目录/文件名:拒绝绝对路径、盘符前缀与 `..` 组件。
+/// 这是 zip-slip 的第二道闸——解包库(sevenz-rust2 safe_join)管住压缩包条目,
+/// 这里管住 playlist.json 的字段,防止恶意包把 meta.json 写到导入目录之外
+fn safe_manifest_part(part: &str) -> Option<String> {
+    use std::path::Component;
+    let normalized = part.replace('\\', "/");
+    let mut out: Vec<&str> = Vec::new();
+    for c in Path::new(&normalized).components() {
+        match c {
+            Component::Normal(p) => out.push(p.to_str()?),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!out.is_empty()).then(|| out.join("/"))
+}
+
 fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, String> {
     let src = Path::new(path);
     if !src.is_file() {
@@ -1968,7 +2026,7 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
         fs::remove_dir_all(&dest).map_err(|e| format!("清理旧目录失败: {e}"))?;
     }
     fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
-    sevenz_rust::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
+    sevenz_rust2::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
 
     let manifest_path = dest.join("playlist.json");
     if !manifest_path.is_file() {
@@ -1991,7 +2049,11 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
 
     // 为无内嵌标签的文件写 meta.json(扫描器据此补齐元数据)
     for item in &tracks_json {
-        let Some(dir) = item.get("dir").and_then(|x| x.as_str()) else {
+        let Some(dir) = item
+            .get("dir")
+            .and_then(|x| x.as_str())
+            .and_then(safe_manifest_part)
+        else {
             continue;
         };
         let dir_path = dest.join(dir);
@@ -2014,10 +2076,18 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
     // 建立播放列表:优先用扫描后的曲库数据,否则退回 manifest 快照
     let mut entries: Vec<model::PlaylistEntry> = Vec::new();
     for item in &tracks_json {
-        let Some(dir) = item.get("dir").and_then(|x| x.as_str()) else {
+        let Some(dir) = item
+            .get("dir")
+            .and_then(|x| x.as_str())
+            .and_then(safe_manifest_part)
+        else {
             continue;
         };
-        let Some(audio) = item.get("audio").and_then(|x| x.as_str()) else {
+        let Some(audio) = item
+            .get("audio")
+            .and_then(|x| x.as_str())
+            .and_then(safe_manifest_part)
+        else {
             continue;
         };
         let abs = dest.join(dir).join(audio);
@@ -2248,7 +2318,7 @@ fn get_library(state: State<AppState>) -> Result<InvokeResponseBody, String> {
 }
 
 #[tauri::command]
-fn add_folder(path: String, state: State<AppState>) -> Result<(), String> {
+fn add_folder(path: String, app: tauri::AppHandle, state: State<AppState>) -> Result<(), String> {
     if !Path::new(&path).is_dir() {
         return Err("该路径不是一个文件夹".into());
     }
@@ -2259,6 +2329,8 @@ fn add_folder(path: String, state: State<AppState>) -> Result<(), String> {
             lib.folders.pop();
             return Err(e.to_string());
         }
+        // 新登记的文件夹要同步进 asset 协议放行名单,否则封面/音频加载不出来
+        refresh_asset_scope(&app);
     }
     Ok(())
 }
@@ -2359,7 +2431,9 @@ pub fn run() {
                 scan_gate: Mutex::new(()),
             });
             // 首次启动即建好导入目录并登记为扫描来源
-            ensure_import_dir(&app.state::<AppState>()).ok();
+            ensure_import_dir(handle, &app.state::<AppState>()).ok();
+            // asset 协议初始放行:封面缓存 + 曲库文件夹(静态 ** 范围已移除)
+            refresh_asset_scope(handle);
             // 命令行/双击"打开方式"传入的文件
             let cli_args: Vec<String> = std::env::args().collect();
             handle_open_paths(handle, &cli_args);
@@ -2584,7 +2658,8 @@ mod tests {
     #[test]
     fn tmc_small_dict_archive_roundtrips_via_own_decoder() {
         // 导出用的 1MiB 字典 LZMA2 配置必须能被应用自身的解包路径读回
-        use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+        use sevenz_rust2::encoder_options::{EncoderOptions, Lzma2Options};
+        use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod};
 
         let dir = std::env::temp_dir().join(format!("tm-7z-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -2593,24 +2668,76 @@ mod tests {
         fs::write(&src, vec![7u8; 4096]).unwrap();
 
         let archive = dir.join("out.tmc");
-        let mut writer = SevenZWriter::create(&archive).unwrap();
-        writer.set_content_methods(vec![sevenz_rust::SevenZMethodConfiguration::new(
-            sevenz_rust::SevenZMethod::LZMA2,
-        )
-        .with_options(sevenz_rust::MethodOptions::Num(1 << 20))]);
+        let mut writer = ArchiveWriter::create(&archive).unwrap();
+        let mut lzma2 = Lzma2Options::default();
+        lzma2.set_dictionary_size(1 << 20);
+        writer.set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::LZMA2)
+            .with_options(EncoderOptions::Lzma2(lzma2))]);
         let file = fs::File::open(&src).unwrap();
         writer
             .push_archive_entry(
-                SevenZArchiveEntry::from_path(&src, "a.bin".to_string()),
+                ArchiveEntry::from_path(&src, "a.bin".to_string()),
                 Some(file),
             )
             .unwrap();
         writer.finish().unwrap();
 
         let out = dir.join("roundtrip");
-        sevenz_rust::decompress_file(&archive, &out).unwrap();
+        sevenz_rust2::decompress_file(&archive, &out).unwrap();
         assert_eq!(fs::read(out.join("a.bin")).unwrap(), vec![7u8; 4096]);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tmc_import_rejects_zip_slip_entry_names() {
+        // RUSTSEC-2026-0245 的回归防线:恶意包的穿越条目名必须被拒收,文件绝不落盘
+        use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
+
+        let dir = std::env::temp_dir().join(format!("tm-slip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("payload.bin");
+        fs::write(&src, b"evil").unwrap();
+
+        let archive = dir.join("evil.tmc");
+        let mut writer = ArchiveWriter::create(&archive).unwrap();
+        for name in [
+            "..\\escaped.txt",
+            "../../../escaped.txt",
+            "C:\\Temp\\escaped.txt",
+        ] {
+            let file = fs::File::open(&src).unwrap();
+            writer
+                .push_archive_entry(ArchiveEntry::from_path(&src, name.to_string()), Some(file))
+                .unwrap();
+        }
+        writer.finish().unwrap();
+
+        let dest = dir.join("out");
+        assert!(sevenz_rust2::decompress_file(&archive, &dest).is_err());
+        // 无论逃逸到解包目录的哪里,都不允许出现落盘文件
+        assert!(!dir.join("escaped.txt").exists());
+        assert!(!dest.join("escaped.txt").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn manifest_part_rejects_traversal_and_accepts_normal() {
+        use super::safe_manifest_part;
+        // 正常的 manifest 字段(与导出侧生成格式一致)
+        assert_eq!(
+            safe_manifest_part("music/01. 海阔天空 - Beyond"),
+            Some("music/01. 海阔天空 - Beyond".to_string())
+        );
+        assert_eq!(safe_manifest_part("a\\b\\c"), Some("a/b/c".to_string()));
+        // 穿越与绝对路径一律拒绝
+        assert_eq!(safe_manifest_part("../evil"), None);
+        assert_eq!(safe_manifest_part("a/../../evil"), None);
+        assert_eq!(safe_manifest_part(r"..\..\evil"), None);
+        assert_eq!(safe_manifest_part(r"C:\Temp\evil"), None);
+        assert_eq!(safe_manifest_part("/etc/evil"), None);
+        assert_eq!(safe_manifest_part(""), None);
+        assert_eq!(safe_manifest_part("."), None);
     }
 
     #[test]
@@ -2697,9 +2824,11 @@ mod tests {
         assert_eq!(sanitize_name("  Beyond  "), "Beyond");
         // 结尾的点与空格被 Windows 静默吞掉,一并去掉
         assert_eq!(sanitize_name("海阔天空. "), "海阔天空");
-        // Windows 保留名加前缀
+        // Windows 保留名加前缀(主名比对,带扩展名的 CON.mp3 同样保留)
         assert_eq!(sanitize_name("CON"), "_CON");
         assert_eq!(sanitize_name("com1"), "_com1");
+        assert_eq!(sanitize_name("CON.mp3"), "_CON.mp3");
+        assert_eq!(sanitize_name("my.CON"), "my.CON");
         // 控制字符剔除,空结果回退默认名
         assert_eq!(sanitize_name("\u{0}\u{1}"), "track");
         assert_eq!(sanitize_name(""), "track");

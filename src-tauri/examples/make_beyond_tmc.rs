@@ -21,7 +21,7 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, ItemValue, TagItem};
 use serde_json::{json, Value};
-use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -510,7 +510,7 @@ fn year_from_ms(ms: i64) -> Option<i32> {
 }
 
 fn pack(dest: &Path, work: &Path) -> Result<PathBuf, String> {
-    let mut writer = SevenZWriter::create(dest).map_err(|e| format!("创建 TMC 失败: {e}"))?;
+    let mut writer = ArchiveWriter::create(dest).map_err(|e| format!("创建 TMC 失败: {e}"))?;
     let mut entries: Vec<_> = fs::read_dir(work)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
@@ -520,10 +520,7 @@ fn pack(dest: &Path, work: &Path) -> Result<PathBuf, String> {
     for p in entries {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         writer
-            .push_archive_entry(
-                SevenZArchiveEntry::from_path(&p, name),
-                fs::File::open(&p).ok(),
-            )
+            .push_archive_entry(ArchiveEntry::from_path(&p, name), fs::File::open(&p).ok())
             .map_err(|e| format!("打包条目失败: {e}"))?;
     }
     writer.finish().map_err(|e| format!("写 TMC 失败: {e}"))?;
