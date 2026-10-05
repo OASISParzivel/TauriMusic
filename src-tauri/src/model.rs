@@ -19,8 +19,10 @@ pub struct Track {
     pub duration: f64,
     /// 音频文件绝对路径
     pub path: String,
-    /// 缓存后的封面图片绝对路径(内嵌封面已落盘,或专辑目录内的 cover/folder 图片)
+    /// 缓存后的封面小图绝对路径(256px,列表/网格用)
     pub cover: Option<String>,
+    /// 缓存后的封面大图绝对路径(512px,详情页/全屏播放页用)
+    pub cover_large: Option<String>,
     /// 是否存在可用歌词(内嵌或同名 .lrc)
     pub has_lyrics: bool,
     /// 同名 .lrc 伴生文件路径

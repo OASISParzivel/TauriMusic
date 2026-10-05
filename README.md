@@ -105,7 +105,7 @@ src-tauri/
 
 - 曲库、文件夹配置、播放列表与应用内回收站:`%APPDATA%\com.art3mis.taurimusic\library.json`(写入为原子替换,旧文件保留为 `library.json.bak`)
 - 回收站文件本体:`%APPDATA%\com.art3mis.taurimusic\Trash\`(删除的音乐移到这里,30 天后启动时自动清理)
-- 封面缓存:`%LOCALAPPDATA%\com.art3mis.taurimusic\covers\`
+- 封面缓存:`%LOCALAPPDATA%\com.art3mis.taurimusic\covers\`(256px 列表图 + 512px 详情图两级缩略图,列表场景解码内存降至 1/4)
 
 删除这两个目录即可完全重置应用。
 

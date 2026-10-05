@@ -66,7 +66,7 @@ function onDeleteAlbum(): void {
     </button>
     <header class="detail-head">
       <div class="cover">
-        <img v-if="album.cover" :src="convertFileSrc(album.cover)" alt="" />
+        <img v-if="album.coverLarge ?? album.cover" :src="convertFileSrc(album.coverLarge ?? album.cover!)" alt="" />
         <div v-else class="ph">♪</div>
       </div>
       <div class="meta-col">

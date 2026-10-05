@@ -6,7 +6,11 @@ import { player, current, toggle, next, prev, seek, fmtTime } from "../stores/pl
 import ModeIcon from "./ModeIcon.vue";
 import { ui } from "../stores/ui";
 
-const coverUrl = computed(() => (current.value?.cover ? convertFileSrc(current.value.cover) : null));
+const coverUrl = computed(() => {
+  // 全屏播放页是大图消费方,优先 512px 档;旧记录没有大图时退回小图
+  const src = current.value?.coverLarge ?? current.value?.cover;
+  return src ? convertFileSrc(src) : null;
+});
 const bgStyle = computed(() => ({
   "--np-cover": coverUrl.value ? `url("${coverUrl.value}")` : "none",
 }));

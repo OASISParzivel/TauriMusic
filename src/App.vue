@@ -44,9 +44,11 @@ const pageKey = computed(
   () => `${ui.view}|${ui.albumKey ?? ""}|${ui.artist ?? ""}|${ui.playlistId ?? ""}`,
 );
 
-const ambientImg = computed(() =>
-  current.value?.cover ? `url("${convertFileSrc(current.value.cover)}")` : "",
-);
+const ambientImg = computed(() => {
+  // 氛围背景全屏铺开,用大图档;模糊之下小图也够,但大图切歌时的淡入更细腻
+  const src = current.value?.coverLarge ?? current.value?.cover;
+  return src ? `url("${convertFileSrc(src)}")` : "";
+});
 const ambientKey = computed(() => current.value?.id ?? "none");
 
 onMounted(() => {

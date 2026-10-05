@@ -788,7 +788,21 @@ fn stage_tmca_blocking(
     let _ = fs::remove_dir_all(&workspace);
     fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
 
-    let (mut assets, items) = plan_track_assets(&tracks, &workspace)?;
+    let (mut assets, mut items) = plan_track_assets(&tracks, &workspace)?;
+
+    // 专辑封面是专辑级属性,包内只保留一份:去重后放包根 cover.{ext},
+    // 导入时再分发到各曲目目录(存在多种不同封面的特殊专辑退回逐曲目携带)
+    let (root_cover, items) = match dedupe_album_cover_assets(&mut assets) {
+        Some(name) => {
+            for item in &mut items {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.remove("cover");
+                }
+            }
+            (Some(name.clone()), items)
+        }
+        None => (None, items),
+    };
 
     let manifest = serde_json::json!({
         "format": "tmca",
@@ -797,6 +811,7 @@ fn stage_tmca_blocking(
         "albumArtist": tracks[0].album_artist,
         "year": tracks[0].year,
         "genre": tracks[0].genre,
+        "cover": root_cover,
         "createdAt": now_secs(),
         "tracks": items,
     });
@@ -816,6 +831,70 @@ fn stage_tmca_blocking(
     place_archive(&tmp_archive, &staged)?;
     let _ = fs::remove_dir_all(&workspace);
     Ok(staged.to_string_lossy().to_string())
+}
+
+/// TMCA 专辑包封面去重:封面条目(名字形如 music/NN. xxx/{stem}.cover.{ext})按源文件去重,
+/// 只有唯一来源时移除全部逐曲目副本、在资源表第 2 位插入包根 cover.{ext};
+/// 存在多种不同封面(特殊版本)返回 None,调用方保持原样(正确性优先)
+fn dedupe_album_cover_assets(assets: &mut ExportAssets) -> Option<String> {
+    let cover_idxs: Vec<usize> = assets
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _))| {
+            Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.contains(".cover."))
+                .unwrap_or(false)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if cover_idxs.is_empty() {
+        return None;
+    }
+    let first_src = assets[cover_idxs[0]].1.clone();
+    if cover_idxs.iter().any(|&i| assets[i].1 != first_src) {
+        return None;
+    }
+    let ext = Path::new(&first_src)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg")
+        .to_lowercase();
+    let root_name = format!("cover.{ext}");
+    for &i in cover_idxs.iter().rev() {
+        assets.remove(i);
+    }
+    assets.insert(1, (root_name.clone(), first_src));
+    Some(root_name)
+}
+
+/// 把 TMCA 包根的单份封面复制进各曲目目录(无副本时才复制,避免重复覆盖)。
+/// 扫描器按目录级 cover.{ext} 约定取用;包内无根封面(特殊多封面专辑)则不动
+fn distribute_pack_cover(dest: &Path, tracks_json: &[serde_json::Value]) {
+    let root = ["cover.jpg", "cover.png", "cover.webp", "cover.jpeg"]
+        .iter()
+        .map(|n| dest.join(n))
+        .find(|p| p.is_file());
+    let Some(root) = root else { return };
+    let Some(name) = root.file_name() else { return };
+    for item in tracks_json {
+        let Some(dir) = item
+            .get("dir")
+            .and_then(|x| x.as_str())
+            .and_then(safe_manifest_part)
+        else {
+            continue;
+        };
+        let dir_path = dest.join(dir);
+        if !dir_path.is_dir() {
+            continue;
+        }
+        let target = dir_path.join(name);
+        if !target.exists() {
+            let _ = fs::copy(&root, &target);
+        }
+    }
 }
 
 /// 依据 manifest 的 tracks 字段为每个子目录写 meta.json(扫描器据此补齐无内嵌标签的文件)。
@@ -899,6 +978,9 @@ fn import_tmca_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, St
 
     // 为无内嵌标签的文件补 meta.json(扫描器据此补齐元数据)
     write_manifest_meta_files(&dest, &tracks_json);
+
+    // 包级封面分发到各曲目目录(目录级封面约定);曲目带内嵌封面时扫描器自动优先内嵌
+    distribute_pack_cover(&dest, &tracks_json);
 
     // 扫描入库(与拖拽导入同一路径);专辑归类由 meta.json/内嵌标签成立
     scanner::run_scan(app)?;

@@ -26,6 +26,7 @@ character_converter = "1"
 trash = "5"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json", "gzip"] }
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+mimalloc = "0.1"
 sevenz-rust2 = "0.23.0"
 
 [target.'cfg(windows)'.dependencies]

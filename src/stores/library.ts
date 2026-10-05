@@ -10,7 +10,10 @@ export interface Album {
   album: string;
   artist: string;
   year: number | null;
+  /** 封面小图(列表网格用) */
   cover: string | null;
+  /** 封面大图(详情页头部用) */
+  coverLarge: string | null;
   tracks: Track[];
 }
 
@@ -636,11 +639,20 @@ export const albums = computed<Album[]>(() => {
     const key = keyOf(t);
     let a = map.get(key);
     if (!a) {
-      a = { key, album: t.album, artist: t.albumArtist || t.artist, year: t.year, cover: t.cover, tracks: [] };
+      a = {
+        key,
+        album: t.album,
+        artist: t.albumArtist || t.artist,
+        year: t.year,
+        cover: t.cover,
+        coverLarge: t.coverLarge,
+        tracks: [],
+      };
       map.set(key, a);
     }
     a.tracks.push(t);
     if (!a.cover && t.cover) a.cover = t.cover;
+    if (!a.coverLarge && t.coverLarge) a.coverLarge = t.coverLarge;
     if (a.year == null && t.year != null) a.year = t.year;
   }
   for (const a of map.values()) {

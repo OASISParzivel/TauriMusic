@@ -12,7 +12,10 @@ export interface Track {
   genre: string | null;
   duration: number;
   path: string;
+  /** 缓存后的封面小图绝对路径(256px,列表/网格用) */
   cover: string | null;
+  /** 缓存后的封面大图绝对路径(512px,详情页/全屏播放页用) */
+  coverLarge: string | null;
   hasLyrics: boolean;
   lrcPath: string | null;
   addedAt: number;

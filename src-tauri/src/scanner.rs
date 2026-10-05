@@ -24,10 +24,13 @@ pub fn parse_year(s: &str) -> Option<i32> {
         .ok()
         .filter(|&y| (1000..=3000).contains(&y))
 }
+/// 专辑封面缓存:album_key → (小图路径, 大图路径)
+type CoverPair = (Option<String>, Option<String>);
+
 /// 目录内兜底封面文件名(不含扩展名)
 const COVER_NAMES: &[&str] = &["cover", "folder", "front", "album", "albumart"];
-/// 曲库格式版本:复用旧记录的条件之一。版本不一致时强制全量重扫(如封面改存缩略图)
-const SCAN_VERSION: u32 = 2;
+/// 曲库格式版本:复用旧记录的条件之一。版本不一致时强制全量重扫(如封面改存双档缩略图)
+const SCAN_VERSION: u32 = 3;
 
 /// 全量扫描所有已登记的音乐文件夹,与旧曲库做增量合并后落盘。
 /// 通过 AppState 的扫描闸防重入:已有扫描进行中时直接返回错误。
@@ -92,7 +95,7 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
         .unwrap_or(4)
         .clamp(1, 8);
     let chunk_size = total.div_ceil(workers).max(1);
-    let album_covers: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+    let album_covers: Mutex<HashMap<String, CoverPair>> = Mutex::new(HashMap::new());
     let done = std::sync::atomic::AtomicUsize::new(0);
 
     let chunk_results: Vec<Vec<Track>> = std::thread::scope(|scope| {
@@ -135,7 +138,12 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
                                 .cover
                                 .as_ref()
                                 .map(|c| Path::new(c).is_file())
-                                .unwrap_or(true);
+                                .unwrap_or(true)
+                                && prev
+                                    .cover_large
+                                    .as_ref()
+                                    .map(|c| Path::new(c).is_file())
+                                    .unwrap_or(true);
                             let lrc_ok = prev
                                 .lrc_path
                                 .as_ref()
@@ -235,7 +243,7 @@ fn parse_track(
     size: u64,
     added_at: f64,
     covers_dir: &Path,
-    album_covers: &mut HashMap<String, String>,
+    album_covers: &mut HashMap<String, CoverPair>,
 ) -> Result<Track, String> {
     use lofty::file::{AudioFile, TaggedFileExt};
     use lofty::picture::MimeType;
@@ -319,55 +327,66 @@ fn parse_track(
     let has_lyrics =
         lrc_path.is_some() || tag.and_then(|t| t.get_string(&ItemKey::Lyrics)).is_some();
 
-    // 封面:优先内嵌图片(同专辑只落盘一次),其次目录内的 cover/folder 图片
+    // 封面:优先内嵌图片(同专辑只落盘一次),其次目录内的 cover/folder 图片。
+    // 统一进缓存并生成两级缩略图:列表用 256 小图,详情/播放页用 512 大图,
+    // 渲染进程按展示尺寸解码,不再为 40px 的行解码 3000px 原图
     let album_key = format!(
         "{}\u{1}{}\u{1}{}",
         album_artist,
         album,
         parent.to_string_lossy()
     );
-    let cover = if let Some(c) = album_covers.get(&album_key) {
-        Some(c.clone())
+    let (cover, cover_large) = if let Some(c) = album_covers.get(&album_key) {
+        c.clone()
     } else {
-        let mut found: Option<String> = None;
+        // 来源优先级:内嵌 → {stem}.cover.* → cover.*;统一读出字节进缓存
+        let mut source: Option<(Vec<u8>, &'static str)> = None;
         if let Some(pic) = tag.and_then(|t| t.pictures().first()) {
-            // 优先落盘缩略图(几百 KB 的 3000px 原图会拖慢列表滚动),解码失败再原样写入
-            found = write_cover_thumb(covers_dir, &album_key, pic.data()).or_else(|| {
-                let ext = match pic.mime_type() {
-                    Some(MimeType::Png) => "png",
-                    _ => "jpg",
-                };
-                let file = covers_dir.join(format!("{:016x}.{ext}", hash_str(&album_key)));
-                fs::write(&file, pic.data())
-                    .ok()
-                    .map(|_| file.to_string_lossy().to_string())
-            });
+            let ext = match pic.mime_type() {
+                Some(MimeType::Png) => "png",
+                _ => "jpg",
+            };
+            source = Some((pic.data().to_vec(), ext));
         }
-        if found.is_none() {
-            // 曲目专属旁路封面(多专辑混居目录用):{stem}.cover.jpg 优先于通用 cover.*
+        if source.is_none() {
             'stem_cover: for ext in COVER_EXTS {
                 let p = parent.join(format!("{stem}.cover.{ext}"));
                 if p.is_file() {
-                    found = Some(p.to_string_lossy().to_string());
+                    source = fs::read(&p).ok().map(|b| (b, *ext));
                     break 'stem_cover;
                 }
             }
         }
-        if found.is_none() {
+        if source.is_none() {
             'outer: for name in COVER_NAMES {
                 for ext in COVER_EXTS {
                     let p = parent.join(format!("{name}.{ext}"));
                     if p.is_file() {
-                        found = Some(p.to_string_lossy().to_string());
+                        source = fs::read(&p).ok().map(|b| (b, *ext));
                         break 'outer;
                     }
                 }
             }
         }
-        if let Some(f) = &found {
-            album_covers.insert(album_key, f.clone());
-        }
-        found
+        let (cover, cover_large) = match source {
+            Some((data, ext)) => {
+                write_cover_thumbs(covers_dir, &album_key, &data).unwrap_or_else(|| {
+                    // 解码失败(损坏图片):原样落盘,两档都指向它
+                    let file = covers_dir.join(format!("{:016x}.{ext}", hash_str(&album_key)));
+                    fs::write(&file, &data).ok();
+                    let p = file.to_string_lossy().to_string();
+                    (p.clone(), p)
+                })
+            }
+            None => (String::new(), String::new()),
+        };
+        let result = if cover.is_empty() {
+            (None, None)
+        } else {
+            (Some(cover), Some(cover_large))
+        };
+        album_covers.insert(album_key, result.clone());
+        result
     };
 
     Ok(Track {
@@ -383,6 +402,7 @@ fn parse_track(
         duration,
         path: path_str,
         cover,
+        cover_large,
         has_lyrics,
         lrc_path,
         added_at,
@@ -395,31 +415,43 @@ fn parse_slashed_number(s: String) -> Option<u32> {
     s.split('/').next()?.trim().parse().ok()
 }
 
-/// 内嵌封面落盘为不超过 512px 的 JPEG 缩略图;解码失败返回 None(调用方回退原样写入)
-fn write_cover_thumb(covers_dir: &Path, album_key: &str, data: &[u8]) -> Option<String> {
+/// 列表/网格用的小图上限:行内 40px、卡片约 170px,256px 在 1.5x DPI 下仍然清晰;
+/// 解码内存 256²×4 ≈ 256KB,是 512px 的四分之一——大图在列表场景是纯浪费
+const THUMB_SMALL: u32 = 256;
+/// 详情页/全屏播放页用的大图上限
+const THUMB_LARGE: u32 = 512;
+
+/// 把封面源数据落成两级 JPEG 缩略图(256 小图 + 512 大图),返回 (小图, 大图) 路径;
+/// 解码失败返回 None(调用方回退原样写入)
+fn write_cover_thumbs(covers_dir: &Path, album_key: &str, data: &[u8]) -> Option<(String, String)> {
     use image::codecs::jpeg::JpegEncoder;
     use image::imageops::FilterType;
     use image::ImageEncoder;
 
-    const MAX_DIM: u32 = 512;
     let img = image::load_from_memory(data).ok()?;
-    let thumb = if img.width().max(img.height()) > MAX_DIM {
-        img.resize(MAX_DIM, MAX_DIM, FilterType::Triangle)
-    } else {
-        img
+    let write = |max_dim: u32, name: String| -> Option<String> {
+        let thumb = if img.width().max(img.height()) > max_dim {
+            img.resize(max_dim, max_dim, FilterType::Triangle)
+        } else {
+            img.clone()
+        };
+        let rgb = thumb.to_rgb8();
+        let file = covers_dir.join(name);
+        let mut out = fs::File::create(&file).ok()?;
+        JpegEncoder::new_with_quality(&mut out, 85)
+            .write_image(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .ok()?;
+        Some(file.to_string_lossy().to_string())
     };
-    let rgb = thumb.to_rgb8();
-    let file = covers_dir.join(format!("{:016x}.jpg", hash_str(album_key)));
-    let mut out = fs::File::create(&file).ok()?;
-    JpegEncoder::new_with_quality(&mut out, 85)
-        .write_image(
-            rgb.as_raw(),
-            rgb.width(),
-            rgb.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .ok()?;
-    Some(file.to_string_lossy().to_string())
+    let key = format!("{:016x}", hash_str(album_key));
+    let small = write(THUMB_SMALL, format!("{key}.jpg"))?;
+    let large = write(THUMB_LARGE, format!("{key}l.jpg"))?;
+    Some((small, large))
 }
 
 /// 音频旁路元数据文件的最新修改时间(封面 cover.* / {stem}.cover.* 与同名 .lrc),无则 0
@@ -653,45 +685,71 @@ mod tests {
 
     #[test]
     fn parse_track_cover_priority_stem_before_dir() {
+        use image::ImageFormat;
         let dir = temp_dir("coverprio");
         let audio = dir.join("s.wav");
         write_wav(&audio);
-        fs::write(dir.join("s.cover.jpg"), b"track").unwrap();
-        fs::write(dir.join("cover.jpg"), b"dir").unwrap();
 
-        // 曲目专属旁路封面优先于目录封面
+        // 生成两张可解码且颜色不同的 PNG,通过像素颜色验证优先级
+        let png = |rgb: [u8; 3]| -> Vec<u8> {
+            let mut img = image::DynamicImage::new_rgb8(64, 64);
+            img.as_mut_rgb8()
+                .unwrap()
+                .pixels_mut()
+                .for_each(|p| *p = image::Rgb(rgb));
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, ImageFormat::Png).unwrap();
+            buf.into_inner()
+        };
+        fs::write(dir.join("s.cover.jpg"), png([255, 0, 0])).unwrap();
+        fs::write(dir.join("cover.jpg"), png([0, 0, 255])).unwrap();
+
+        // 曲目专属旁路封面优先于目录封面(封面统一进缓存,按像素颜色判别来源)
         let t = parse_track(&audio, 0.0, 1, 0.0, &dir, &mut HashMap::new()).unwrap();
-        let expect = dir.join("s.cover.jpg").to_string_lossy().to_string();
-        assert_eq!(t.cover, Some(expect));
+        let c = t.cover.expect("stem cover");
+        let pixel = image::open(&c).unwrap().to_rgb8().get_pixel(0, 0).0;
+        // JPEG 有损,通道值允许 ±8 误差;红胜蓝即专属封面胜出
+        assert!(
+            pixel[0] >= 247 && pixel[1] <= 8 && pixel[2] <= 8,
+            "应取曲目专属封面(红): {pixel:?}"
+        );
 
         // 删除专属封面后回退目录封面
         fs::remove_file(dir.join("s.cover.jpg")).unwrap();
         let t = parse_track(&audio, 0.0, 1, 0.0, &dir, &mut HashMap::new()).unwrap();
-        let expect = dir.join("cover.jpg").to_string_lossy().to_string();
-        assert_eq!(t.cover, Some(expect));
+        let c = t.cover.expect("dir cover");
+        let pixel = image::open(&c).unwrap().to_rgb8().get_pixel(0, 0).0;
+        assert!(
+            pixel[2] >= 247 && pixel[0] <= 8 && pixel[1] <= 8,
+            "应回退目录封面(蓝): {pixel:?}"
+        );
 
         // 全部移除后无封面
         fs::remove_file(dir.join("cover.jpg")).unwrap();
         let t = parse_track(&audio, 0.0, 1, 0.0, &dir, &mut HashMap::new()).unwrap();
-        assert!(t.cover.is_none());
+        assert!(t.cover.is_none() && t.cover_large.is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn cover_thumb_scales_down_and_rejects_invalid() {
+    fn cover_thumbs_write_two_tiers_and_reject_invalid() {
         use image::ImageFormat;
         let dir = temp_dir("thumb");
         let img = image::DynamicImage::new_rgb8(800, 600);
         let mut png = std::io::Cursor::new(Vec::new());
         img.write_to(&mut png, ImageFormat::Png).unwrap();
 
-        let out = write_cover_thumb(&dir, "album\u{1}x", png.get_ref()).unwrap();
-        assert!(out.ends_with(".jpg"));
-        let decoded = image::open(&out).unwrap();
-        assert!(decoded.width().max(decoded.height()) <= 512);
+        let (small, large) = write_cover_thumbs(&dir, "album\u{1}x", png.get_ref()).unwrap();
+        assert!(small.ends_with(".jpg") && !small.contains("l.jpg"));
+        assert!(large.contains("l.jpg"));
+        let s_decoded = image::open(&small).unwrap();
+        assert!(s_decoded.width().max(s_decoded.height()) <= 256);
+        let l_decoded = image::open(&large).unwrap();
+        assert!(l_decoded.width().max(l_decoded.height()) <= 512);
+        assert!(l_decoded.width().max(l_decoded.height()) > 256); // 800x600 只压到大图档
 
         // 非图片数据返回 None,调用方回退原样写入
-        assert!(write_cover_thumb(&dir, "album\u{1}y", b"not-an-image").is_none());
+        assert!(write_cover_thumbs(&dir, "album\u{1}y", b"not-an-image").is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
