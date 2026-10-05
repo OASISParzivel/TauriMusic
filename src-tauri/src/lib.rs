@@ -1884,12 +1884,16 @@ mod tests {
         assert!(is_under(r"F:\music", r"F:\music"));
         assert!(!is_under(r"F:\music2\a.mp3", r"F:\music"));
         assert!(!is_under(r"F:\musica\c.mp3", r"F:\music"));
-        // 正斜杠形式(跨平台)与盘符大小写
+        // 正斜杠形式(跨平台)
         assert!(is_under("F:/music/a.mp3", r"F:\music"));
-        assert!(is_under(r"f:\MUSIC\a.mp3", r"F:\music"));
         assert!(!is_under("/music/other/x.mp3", "/music/sub"));
         // 空目录参数不构成包含关系
         assert!(!is_under(r"F:\music\a.mp3", ""));
+        // 盘符大小写不敏感仅限 Windows
+        #[cfg(windows)]
+        assert!(is_under(r"f:\MUSIC\a.mp3", r"F:\music"));
+        #[cfg(not(windows))]
+        assert!(!is_under(r"f:\MUSIC\a.mp3", r"F:\music"));
     }
 
     #[test]
