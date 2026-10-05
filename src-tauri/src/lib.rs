@@ -144,9 +144,31 @@ fn import_paths_blocking(paths: &[String], app: &tauri::AppHandle) -> Result<Imp
 }
 
 /// 用路径组件判断 target 是否位于 dir 之下(与字符串前缀匹配不同,
-/// 不会把 F:\music2 误当成 F:\music 的子目录)
+/// 不会把 F:\music2 误当成 F:\music 的子目录)。
+/// 手动按 /\ 双分隔符切分组件,不依赖 std 的平台语义,
+/// Windows 风格路径字符串在非 Windows 平台上同样可判定。
 fn is_under(child: &str, dir: &str) -> bool {
-    Path::new(child).starts_with(Path::new(dir))
+    fn components(p: &str) -> impl Iterator<Item = &str> {
+        p.split(['\\', '/']).filter(|s| !s.is_empty())
+    }
+    // Windows 路径大小写不敏感(盘符/目录),其他平台精确比较
+    fn part_eq(a: &str, b: &str) -> bool {
+        if cfg!(windows) {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    }
+    let mut child_parts = components(child);
+    let mut matched = 0usize;
+    for d in components(dir) {
+        matched += 1;
+        match child_parts.next() {
+            Some(c) if part_eq(c, d) => continue,
+            _ => return false,
+        }
+    }
+    matched > 0
 }
 
 /// 两个文件内容是否完全一致(仅在大小相同时调用才有意义)
@@ -1862,6 +1884,12 @@ mod tests {
         assert!(is_under(r"F:\music", r"F:\music"));
         assert!(!is_under(r"F:\music2\a.mp3", r"F:\music"));
         assert!(!is_under(r"F:\musica\c.mp3", r"F:\music"));
+        // 正斜杠形式(跨平台)与盘符大小写
+        assert!(is_under("F:/music/a.mp3", r"F:\music"));
+        assert!(is_under(r"f:\MUSIC\a.mp3", r"F:\music"));
+        assert!(!is_under("/music/other/x.mp3", "/music/sub"));
+        // 空目录参数不构成包含关系
+        assert!(!is_under(r"F:\music\a.mp3", ""));
     }
 
     #[test]
