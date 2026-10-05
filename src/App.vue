@@ -19,6 +19,7 @@ import AlbumDetailView from "./views/AlbumDetailView.vue";
 import ArtistsView from "./views/ArtistsView.vue";
 import SongsView from "./views/SongsView.vue";
 import SearchView from "./views/SearchView.vue";
+import TrashView from "./views/TrashView.vue";
 import { ui, initTheme, initGlass, initWelcome } from "./stores/ui";
 import { exportState, initLibrary, initDragImport } from "./stores/library";
 import { initShortcuts } from "./stores/shortcuts";
@@ -34,6 +35,7 @@ const views = {
   search: SearchView,
   playlists: PlaylistsView,
   playlist: PlaylistDetailView,
+  trash: TrashView,
 } as const;
 
 const view = computed(() => views[ui.view]);

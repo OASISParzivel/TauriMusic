@@ -1,7 +1,7 @@
 import { computed, reactive, shallowReactive } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { api, type Playlist, type Track } from "../api";
+import { api, type Playlist, type Track, type TrashEntry } from "../api";
 import { purgeDeleted } from "./player";
 
 export interface Album {
@@ -18,6 +18,8 @@ interface LibState {
   tracks: Track[];
   folders: string[];
   playlists: Playlist[];
+  /** 应用内回收站(删除的音乐在这里保留,可还原) */
+  trash: TrashEntry[];
   loaded: boolean;
   /** 启动读库失败(区别于空库,给用户重试入口) */
   loadError: string | null;
@@ -36,6 +38,7 @@ export const lib = shallowReactive<LibState>({
   tracks: [],
   folders: [],
   playlists: [],
+  trash: [],
   loaded: false,
   loadError: null,
   scanning: false,
@@ -49,10 +52,16 @@ export const lib = shallowReactive<LibState>({
 let importStatusTimer = 0;
 
 /** 应用后端返回的曲库数据(曲目/文件夹/播放列表统一入口) */
-export function applyLibraryData(data: { tracks: Track[]; folders: string[]; playlists?: Playlist[] }): void {
+export function applyLibraryData(data: {
+  tracks: Track[];
+  folders: string[];
+  playlists?: Playlist[];
+  trash?: TrashEntry[];
+}): void {
   lib.tracks = data.tracks;
   lib.folders = data.folders;
   if (data.playlists) lib.playlists = data.playlists;
+  if (data.trash) lib.trash = data.trash;
 }
 
 let listenersInited = false;
@@ -503,8 +512,8 @@ export async function enrichAlbumNetease(key: string): Promise<void> {
   await rescan();
 }
 
-/** 删除曲目:音频与歌词移入回收站,曲库同步移除;删除当前播放曲时清空播放器。
- *  返回是否全部删除成功(失败时调用方应留在原页面并提示)。 */
+/** 删除曲目:音频与歌词移入应用回收站(30 天后自动清理),曲库同步移除;
+ *  删除当前播放曲时清空播放器。返回是否全部删除成功(失败时调用方应留在原页面并提示)。 */
 export async function deleteTracks(ids: string[]): Promise<boolean> {
   if (ids.length === 0) return false;
   let ok = false;
@@ -519,19 +528,47 @@ export async function deleteTracks(ids: string[]): Promise<boolean> {
           : `删除失败:${r.failed} 首文件被占用`,
       );
     } else {
-      flashStatus(r.deleted > 0 ? `已删除 ${r.deleted} 首(移入回收站)` : "删除失败");
+      flashStatus(r.deleted > 0 ? `已删除 ${r.deleted} 首(移入回收站,30 天内可还原)` : "删除失败");
     }
   } catch (err) {
     console.error("删除失败", err);
     flashStatus("删除失败");
   }
+  await refreshLibrary();
+  return ok;
+}
+
+/** 从回收站还原曲目:文件移回原位,曲库记录恢复;ids 为空还原全部 */
+export async function restoreTracks(ids: string[]): Promise<void> {
   try {
-    const data = await api.getLibrary();
-    applyLibraryData(data);
+    const r = await api.restoreTracks(ids);
+    flashStatus(r.failed > 0 ? `已还原 ${r.restored} 首,${r.failed} 首失败` : `已还原 ${r.restored} 首`);
+  } catch (err) {
+    console.error("还原失败", err);
+    flashStatus("还原失败");
+  }
+  await refreshLibrary();
+}
+
+/** 彻底删除回收站条目(不可恢复);ids 为空表示清空全部 */
+export async function purgeTrash(ids: string[]): Promise<void> {
+  try {
+    const n = await api.purgeTrash(ids);
+    flashStatus(ids.length ? `已彻底删除 ${n} 首` : `已清空回收站(共 ${n} 首)`);
+  } catch (err) {
+    console.error("彻底删除失败", err);
+    flashStatus("操作失败");
+  }
+  await refreshLibrary();
+}
+
+/** 重新拉取曲库(不触发扫描) */
+async function refreshLibrary(): Promise<void> {
+  try {
+    applyLibraryData(await api.getLibrary());
   } catch (err) {
     console.error("刷新曲库失败", err);
   }
-  return ok;
 }
 
 export async function openImportDir(): Promise<void> {
@@ -629,11 +666,4 @@ export const allSongs = computed<Track[]>(() =>
 
 export function albumByKey(key: string): Album | undefined {
   return albums.value.find((a) => a.key === key);
-}
-
-/** 专辑“最近添加”排序依据:取专辑内最新的入库/修改时间 */
-export function albumRecency(a: Album): number {
-  let m = 0;
-  for (const t of a.tracks) m = Math.max(m, t.addedAt, t.mtime);
-  return m;
 }

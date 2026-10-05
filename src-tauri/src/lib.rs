@@ -40,6 +40,10 @@ pub struct AppState {
 }
 
 pub(crate) const LIBRARY_FILE: &str = "library.json";
+/// 应用回收站目录(data_dir/Trash):删除的音乐移到这里,保留 TRASH_RETENTION_DAYS 天
+pub(crate) const TRASH_DIR_NAME: &str = "Trash";
+/// 回收站保留天数:超期在启动时自动清理
+pub(crate) const TRASH_RETENTION_DAYS: f64 = 30.0;
 /// 应用自带的音乐导入目录(data_dir/Music),随应用首次启动创建并登记;
 /// 扫描器会把顶层散装音频按「艺人\专辑」归位到该目录下
 pub(crate) const IMPORT_DIR_NAME: &str = "Music";
@@ -1789,15 +1793,6 @@ pub fn kuwo_album_cover(
 
 // ===== 格式关联(HKCU 注册到"打开方式",无需管理员) =====
 
-/// 删除曲目:音频与同名歌词移入回收站,曲库同步移除;
-/// 导入目录内的子目录若已无音频文件则一并清理
-#[tauri::command]
-async fn delete_tracks(ids: Vec<String>, app: tauri::AppHandle) -> Result<DeleteReport, String> {
-    tauri::async_runtime::spawn_blocking(move || delete_tracks_blocking(&ids, &app))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteReport {
@@ -1805,11 +1800,39 @@ pub struct DeleteReport {
     pub failed: u32,
 }
 
+/// 把一个文件移入回收站目录:同卷 rename 原子直达,跨卷退化为拷贝+删源。
+/// 拷贝后删源失败视为整体失败(清掉拷贝,原文件留在原处)
+fn move_into_trash(src: &Path, trash_dir: &Path, name: &str) -> Result<PathBuf, String> {
+    fs::create_dir_all(trash_dir).map_err(|e| format!("创建回收站目录失败: {e}"))?;
+    let dest = dedup_dest(trash_dir.join(name));
+    if fs::rename(src, &dest).is_ok() {
+        return Ok(dest);
+    }
+    fs::copy(src, &dest).map_err(|e| format!("复制进回收站失败: {e}"))?;
+    if let Err(e) = fs::remove_file(src) {
+        let _ = fs::remove_file(&dest);
+        return Err(format!("移除原文件失败: {e}"));
+    }
+    Ok(dest)
+}
+
+/// 删除曲目:音频与同名歌词移入应用回收站(可还原,超期自动清理),
+/// 曲库记录转入回收站条目;导入目录内的空子目录一并清理
+#[tauri::command]
+async fn delete_tracks(ids: Vec<String>, app: tauri::AppHandle) -> Result<DeleteReport, String> {
+    tauri::async_runtime::spawn_blocking(move || delete_tracks_blocking(&ids, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 fn delete_tracks_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<DeleteReport, String> {
+    use model::TrashEntry;
+
     let state = app.state::<AppState>();
     let import_dir = state.data_dir.join("Music");
+    let trash_dir = state.data_dir.join(TRASH_DIR_NAME);
 
-    // 1) 锁内:取出匹配曲目并先从曲库移除(避免长时间持锁做文件删除)
+    // 1) 锁内:取出匹配曲目并先从曲库移除(避免长时间持锁做文件搬运)
     let to_delete: Vec<model::Track> = {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
         let (del, kept): (Vec<model::Track>, Vec<model::Track>) =
@@ -1820,39 +1843,58 @@ fn delete_tracks_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<Dele
         del
     };
 
-    // 2) 锁外:移入回收站(音频 + 同名歌词),回收站可恢复
-    let mut deleted = 0u32;
-    let mut parents: Vec<PathBuf> = Vec::new();
+    // 2) 锁外:移入应用回收站(音频 + 同名歌词)
+    let now = now_secs();
+    let mut entries: Vec<TrashEntry> = Vec::new();
     let mut failed_tracks: Vec<model::Track> = Vec::new();
+    let mut parents: Vec<PathBuf> = Vec::new();
     for t in &to_delete {
-        let p = Path::new(&t.path);
-        match trash::delete(p) {
-            Ok(()) => {
-                deleted += 1;
-                if let Some(parent) = p.parent() {
-                    if let Some(stem) = p.file_stem() {
-                        let _ =
-                            trash::delete(parent.join(format!("{}.lrc", stem.to_string_lossy())));
-                    }
+        let audio = Path::new(&t.path);
+        let ext = audio
+            .extension()
+            .map(|x| x.to_string_lossy().to_string())
+            .unwrap_or_else(|| "mp3".into());
+        let base = format!("{}_{}", t.id, sanitize_name(&t.title));
+        match move_into_trash(audio, &trash_dir, &format!("{base}.{ext}")).and_then(|ta| {
+            let tl = match &t.lrc_path {
+                Some(l) if Path::new(l).is_file() => Some(move_into_trash(
+                    Path::new(l),
+                    &trash_dir,
+                    &format!("{base}.lrc"),
+                )?),
+                _ => None,
+            };
+            Ok((ta, tl))
+        }) {
+            Ok((trashed_audio, trashed_lrc)) => {
+                if let Some(parent) = audio.parent() {
                     let parent = parent.to_path_buf();
                     if !parents.contains(&parent) {
                         parents.push(parent);
                     }
                 }
+                entries.push(TrashEntry {
+                    track: t.clone(),
+                    trashed_audio: trashed_audio.to_string_lossy().to_string(),
+                    trashed_lrc: trashed_lrc.map(|p| p.to_string_lossy().to_string()),
+                    deleted_at: now,
+                });
             }
-            // 回收站删除失败(文件被占用/权限不足)→ 稍后回填曲库,避免幽灵状态
             Err(_) => failed_tracks.push(t.clone()),
         }
     }
 
-    // 3) 失败的回填曲库并落盘
-    if !failed_tracks.is_empty() {
+    // 3) 锁内:回收站条目落库;失败的回填曲库,避免幽灵状态
+    {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        lib.trash.extend(entries);
         lib.tracks.extend(failed_tracks.iter().cloned());
         lib.save(&state.data_dir.join(LIBRARY_FILE))
             .map_err(|e| e.to_string())?;
+    }
+    if !failed_tracks.is_empty() {
         eprintln!(
-            "[delete] {} 首删除失败(文件被占用?),已保留曲库记录",
+            "[delete] {} 首移入回收站失败(文件被占用?),已保留曲库记录",
             failed_tracks.len()
         );
     }
@@ -1880,7 +1922,186 @@ fn delete_tracks_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<Dele
     }
 
     let failed = failed_tracks.len() as u32;
-    Ok(DeleteReport { deleted, failed })
+    Ok(DeleteReport {
+        deleted: to_delete.len() as u32 - failed,
+        failed,
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreReport {
+    pub restored: u32,
+    pub failed: u32,
+}
+
+/// 从回收站还原:文件移回原路径(原位被占则自动改名),曲库记录恢复。
+/// 返回 (成功条目及其最终路径, 失败条目)
+fn restore_entries(
+    entries: Vec<model::TrashEntry>,
+) -> (Vec<(model::Track, PathBuf)>, Vec<model::TrashEntry>) {
+    let mut restored: Vec<(model::Track, PathBuf)> = Vec::new();
+    let mut failed: Vec<model::TrashEntry> = Vec::new();
+    for e in entries {
+        let audio = Path::new(&e.trashed_audio);
+        let dest = Path::new(&e.track.path);
+        let restored_audio = move_back(audio, dest);
+        let restored_audio = match restored_audio {
+            Some(p) => p,
+            None => {
+                failed.push(e);
+                continue;
+            }
+        };
+        let lrc = match (&e.trashed_lrc, &e.track.lrc_path) {
+            (Some(trashed), Some(orig)) => move_back(Path::new(trashed), Path::new(orig)),
+            _ => None,
+        };
+        let mut track = e.track.clone();
+        track.path = restored_audio.to_string_lossy().to_string();
+        if let Some(l) = lrc {
+            track.lrc_path = Some(l.to_string_lossy().to_string());
+        }
+        restored.push((track, restored_audio));
+    }
+    (restored, failed)
+}
+
+/// 把回收站文件移回目标路径;目标存在或同卷 rename 失败时自动换名,
+/// 返回最终落位路径;原目录不存在则重建
+fn move_back(src: &Path, dest: &Path) -> Option<PathBuf> {
+    if !src.is_file() {
+        return None;
+    }
+    if let Some(parent) = dest.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let final_dest = dedup_dest(dest.to_path_buf());
+    if fs::rename(src, &final_dest).is_ok() {
+        return Some(final_dest);
+    }
+    if fs::copy(src, &final_dest).is_ok() {
+        let _ = fs::remove_file(src);
+        return Some(final_dest);
+    }
+    None
+}
+
+/// 还原回收站条目:文件移回原位,曲库记录恢复(触发扫描后重新可见)
+#[tauri::command]
+async fn restore_tracks(ids: Vec<String>, app: tauri::AppHandle) -> Result<RestoreReport, String> {
+    tauri::async_runtime::spawn_blocking(move || restore_tracks_blocking(&ids, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn restore_tracks_blocking(
+    ids: &[String],
+    app: &tauri::AppHandle,
+) -> Result<RestoreReport, String> {
+    let state = app.state::<AppState>();
+    let ids = ids.to_vec();
+    let (all, ids) = {
+        let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        if ids.is_empty() {
+            let all = std::mem::take(&mut lib.trash);
+            (all, Vec::new())
+        } else {
+            let (sel, rest): (Vec<_>, Vec<_>) =
+                lib.trash.drain(..).partition(|e| ids.contains(&e.track.id));
+            lib.trash = rest;
+            (sel, ids)
+        }
+    };
+    if all.is_empty() {
+        return Ok(RestoreReport {
+            restored: 0,
+            failed: 0,
+        });
+    }
+
+    let (restored, mut failed) = restore_entries(all);
+
+    {
+        let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        for (track, _) in &restored {
+            lib.tracks.push(track.clone());
+        }
+        // 只清掉确实还原成功的 id;失败的条目留在回收站
+        let ok_ids: std::collections::HashSet<&str> =
+            restored.iter().map(|(t, _)| t.id.as_str()).collect();
+        failed.retain(|e| !ok_ids.contains(e.track.id.as_str()));
+        lib.trash.extend(std::mem::take(&mut failed));
+        let _ = ids;
+        lib.save(&state.data_dir.join(LIBRARY_FILE))
+            .map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("library-changed", ());
+    Ok(RestoreReport {
+        restored: restored.len() as u32,
+        failed: failed.len() as u32,
+    })
+}
+
+/// 彻底删除回收站条目:ids 为空表示清空全部。文件直接删除(不可恢复)
+#[tauri::command]
+async fn purge_trash(ids: Vec<String>, app: tauri::AppHandle) -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(move || purge_trash_blocking(&ids, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn purge_trash_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<u32, String> {
+    let state = app.state::<AppState>();
+    let purged: Vec<model::TrashEntry> = {
+        let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        if ids.is_empty() {
+            std::mem::take(&mut lib.trash)
+        } else {
+            let (sel, rest): (Vec<_>, Vec<_>) =
+                lib.trash.drain(..).partition(|e| ids.contains(&e.track.id));
+            lib.trash = rest;
+            sel
+        }
+    };
+    for e in &purged {
+        let _ = fs::remove_file(&e.trashed_audio);
+        if let Some(l) = &e.trashed_lrc {
+            let _ = fs::remove_file(l);
+        }
+    }
+    if !purged.is_empty() {
+        let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        lib.save(&state.data_dir.join(LIBRARY_FILE))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(purged.len() as u32)
+}
+
+/// 清理超过保留期的回收站条目(启动时调用)
+fn purge_expired_trash(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let cutoff = now_secs() - TRASH_RETENTION_DAYS * 86400.0;
+    let expired: Vec<model::TrashEntry> = {
+        let mut lib = state.lib.lock().unwrap_or_else(|e| e.into_inner());
+        let (exp, _keep): (Vec<model::TrashEntry>, Vec<model::TrashEntry>) =
+            lib.trash.drain(..).partition(|e| e.deleted_at < cutoff);
+        lib.trash = Vec::new();
+        exp
+    };
+    if expired.is_empty() {
+        return;
+    }
+    for e in &expired {
+        let _ = fs::remove_file(&e.trashed_audio);
+        if let Some(l) = &e.trashed_lrc {
+            let _ = fs::remove_file(l);
+        }
+    }
+    if let Ok(lib) = state.lib.lock() {
+        let _ = lib.save(&state.data_dir.join(LIBRARY_FILE));
+    }
+    eprintln!("[trash] 清理超期回收站条目 {} 条", expired.len());
 }
 
 // ===== 播放列表(用户歌单:创建/改名/增删曲目/排序/导出导入) =====
@@ -2608,6 +2829,8 @@ pub fn run() {
             ensure_import_dir(handle, &app.state::<AppState>()).ok();
             // asset 协议初始放行:封面缓存 + 曲库文件夹(静态 ** 范围已移除)
             refresh_asset_scope(handle);
+            // 清理超过保留期的回收站条目
+            purge_expired_trash(handle);
             // 命令行/双击"打开方式"传入的文件
             let cli_args: Vec<String> = std::env::args().collect();
             handle_open_paths(handle, &cli_args);
@@ -2663,6 +2886,8 @@ pub fn run() {
             get_associations,
             set_association,
             delete_tracks,
+            restore_tracks,
+            purge_trash,
             create_playlist,
             rename_playlist,
             delete_playlist,

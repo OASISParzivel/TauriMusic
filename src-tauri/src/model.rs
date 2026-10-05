@@ -56,6 +56,21 @@ pub struct Playlist {
     pub entries: Vec<PlaylistEntry>,
 }
 
+/// 回收站条目:删除时音频移入应用回收站目录,元数据快照用于展示与还原。
+/// 与系统回收站不同,还原由应用自己完成(把文件移回原路径并恢复曲库记录)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TrashEntry {
+    /// 曲库记录快照(path 保留原路径,还原后沿用)
+    pub track: Track,
+    /// 回收站目录内的音频文件路径
+    pub trashed_audio: String,
+    /// 回收站目录内的歌词文件路径(若有)
+    pub trashed_lrc: Option<String>,
+    /// 删除时间(unix 秒),超过保留期自动清理
+    pub deleted_at: f64,
+}
+
 /// 整个曲库,持久化为 app_data/library.json
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -64,6 +79,9 @@ pub struct Library {
     pub folders: Vec<String>,
     pub tracks: Vec<Track>,
     pub playlists: Vec<Playlist>,
+    /// 应用内回收站(删除的音乐在这里保留一段时间,可还原)
+    #[serde(default)]
+    pub trash: Vec<TrashEntry>,
 }
 
 impl Library {
@@ -154,6 +172,7 @@ mod tests {
         let lib = Library {
             version: 2,
             folders: vec!["F:\\music".into()],
+            trash: vec![],
             playlists: vec![Playlist {
                 id: "pl1".into(),
                 name: "我的歌单".into(),
@@ -210,6 +229,7 @@ mod tests {
         let lib = Library {
             version: 2,
             folders: vec!["F:\\music".into()],
+            trash: vec![],
             playlists: vec![],
             tracks: vec![Track {
                 id: "x".into(),
@@ -241,6 +261,7 @@ mod tests {
         let first = Library {
             version: 1,
             folders: vec![],
+            trash: vec![],
             playlists: vec![],
             tracks: vec![Track {
                 id: "a".into(),
@@ -252,6 +273,7 @@ mod tests {
         let second = Library {
             version: 2,
             folders: vec![],
+            trash: vec![],
             playlists: vec![],
             tracks: vec![Track {
                 id: "b".into(),

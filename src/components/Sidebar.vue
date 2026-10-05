@@ -121,6 +121,11 @@ const statusText = computed(() =>
         :class="{ active: ui.view === 'playlists' }"
         @click="go('playlists')"
       >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <path d="M4 6.5h11M4 12h11M4 17.5h7" />
+          <circle cx="18.5" cy="15.5" r="2.2" />
+          <path d="M20.7 15.5V9l-3.4.9" />
+        </svg>
         <span class="pl-text muted">全部播放列表</span>
       </button>
     </div>
@@ -130,6 +135,19 @@ const statusText = computed(() =>
     <div v-if="statusText" class="status">{{ statusText }}</div>
 
     <div class="actions">
+      <button
+        class="action"
+        :class="{ active: ui.view === 'trash' }"
+        title="回收站:删除的音乐在这里保留 30 天,可还原"
+        @click="go('trash')"
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 7h15M9.5 7V5.2c0-.66.54-1.2 1.2-1.2h2.6c.66 0 1.2.54 1.2 1.2V7M6.5 7l.8 11.3c.06.77.7 1.2 1.4 1.2h6.6c.7 0 1.34-.43 1.4-1.2L17.5 7" />
+          <path d="M10 11v5M14 11v5" />
+        </svg>
+        <span>回收站</span>
+        <span v-if="lib.trash.length" class="badge">{{ lib.trash.length }}</span>
+      </button>
       <button class="action" title="设置" @click="ui.settingsOpen = true">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
           <path d="M5 7.5h7M16.5 7.5H19M5 12h3M11.5 12H19M5 16.5h7M16.5 16.5H19" />
@@ -348,6 +366,25 @@ html.glass .nav-item.active .ico {
 .action:hover {
   background: var(--hover);
   color: var(--text);
+}
+.action.active {
+  background: var(--active);
+  color: var(--text);
+}
+.action.active .ico {
+  color: var(--text);
+}
+html.glass .action.active .ico {
+  color: var(--accent);
+}
+.action .badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-3);
+  background: var(--pill-bg);
+  border-radius: 999px;
+  padding: 1px 7px;
 }
 .action:active {
   transform: scale(0.97);

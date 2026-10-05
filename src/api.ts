@@ -24,6 +24,25 @@ export interface Library {
   version: number;
   folders: string[];
   tracks: Track[];
+  /** 应用内回收站(删除的音乐在这里保留一段时间,可还原) */
+  trash: TrashEntry[];
+}
+
+/** 回收站条目:移入应用回收站的文件与元数据快照 */
+export interface TrashEntry {
+  /** 曲库记录快照(path 保留原路径) */
+  track: Track;
+  /** 回收站目录内的音频文件路径 */
+  trashedAudio: string;
+  /** 回收站目录内的歌词文件路径(若有) */
+  trashedLrc: string | null;
+  /** 删除时间(unix 秒) */
+  deletedAt: number;
+}
+
+export interface RestoreReport {
+  restored: number;
+  failed: number;
 }
 
 export interface ScanReport {
@@ -128,6 +147,10 @@ export const api = {
   setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),
   deleteTracks: (ids: string[]) =>
     invoke<{ deleted: number; failed: number }>("delete_tracks", { ids }),
+  /** 还原回收站条目;ids 为空数组表示还原全部 */
+  restoreTracks: (ids: string[]) => invoke<RestoreReport>("restore_tracks", { ids }),
+  /** 彻底删除回收站条目;ids 为空数组表示清空全部 */
+  purgeTrash: (ids: string[]) => invoke<number>("purge_trash", { ids }),
   createPlaylist: (name: string) => invoke<Playlist[]>("create_playlist", { name }),
   renamePlaylist: (id: string, name: string) => invoke<Playlist[]>("rename_playlist", { id, name }),
   deletePlaylist: (id: string) => invoke<Playlist[]>("delete_playlist", { id }),

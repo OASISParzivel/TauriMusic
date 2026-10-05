@@ -10,7 +10,8 @@ export type ViewName =
   | "songs"
   | "search"
   | "playlists"
-  | "playlist";
+  | "playlist"
+  | "trash";
 /** 皮肤模式:跟随系统 / 浅色 / 黑色 */
 export type ThemeMode = "system" | "light" | "dark";
 

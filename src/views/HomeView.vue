@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { albums, lib, addFolder, removeFolder, rescan, albumRecency, openImportDir, reloadLibrary } from "../stores/library";
-import { openAlbum } from "../stores/ui";
+import { albums, lib, addFolder, removeFolder, rescan, openImportDir, reloadLibrary } from "../stores/library";
+import { go, openAlbum } from "../stores/ui";
 import AlbumCard from "../components/AlbumCard.vue";
 
-// 排序前预计算每张专辑的入库时间,避免比较器内 O(曲目数) 的重复计算
+/** 最近添加:严格按入库时间(addedAt)取最新的 12 张专辑。
+ *  不用 mtime 参与排序——重扫/在线匹配会 touch 文件,把整个库"变新";也不展示全库,
+ *  全库浏览是「专辑」页的职责,这里只回答"最近往库里加了什么" */
 const recent = computed(() => {
-  const recency = new Map(albums.value.map((a) => [a.key, albumRecency(a)]));
-  return [...albums.value].sort(
-    (a, b) => (recency.get(b.key) ?? 0) - (recency.get(a.key) ?? 0) || a.artist.localeCompare(b.artist, "zh"),
-  );
+  const addedAt = new Map(albums.value.map((a) => [a.key, Math.max(...a.tracks.map((t) => t.addedAt), 0)]));
+  return [...albums.value]
+    .sort(
+      (a, b) =>
+        (addedAt.get(b.key) ?? 0) - (addedAt.get(a.key) ?? 0) || a.artist.localeCompare(b.artist, "zh"),
+    )
+    .slice(0, 12);
 });
 
 function shortPath(p: string): string {
@@ -64,7 +69,12 @@ function shortPath(p: string): string {
     <template v-else>
       <header class="view-head">
         <h1>最近添加</h1>
-        <span class="count">{{ albums.length }} 张专辑 · {{ lib.tracks.length }} 首歌曲</span>
+        <div class="right">
+          <span class="count">最新 {{ recent.length }} 张 · 共 {{ albums.length }} 张专辑</span>
+          <button v-if="albums.length > recent.length" class="all-btn" @click="go('albums')">
+            全部专辑
+          </button>
+        </div>
       </header>
 
       <div class="folders">
@@ -85,6 +95,28 @@ function shortPath(p: string): string {
 </template>
 
 <style scoped>
+.right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.all-btn {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--pill-bg);
+  border-radius: 999px;
+  padding: 6px 16px;
+  transition: background 0.2s ease, transform 0.35s var(--ease-spring);
+}
+.all-btn:hover {
+  background: var(--hover);
+}
+.all-btn:active {
+  transform: scale(0.97);
+  transition-duration: 0.09s;
+}
+
 .folders {
   display: flex;
   flex-wrap: wrap;
