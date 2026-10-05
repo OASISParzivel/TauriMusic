@@ -2,12 +2,15 @@
 import { computed } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { fmtTime, playTracks, setMode } from "../stores/player";
-import { go, ui } from "../stores/ui";
+import { go, openAlbum, openArtist, ui } from "../stores/ui";
+import { openCtx, type CtxItem } from "../stores/context";
+import { exportTrackTmc } from "../stores/library";
 import {
   askRenamePlaylist,
   deletePlaylist,
   exportPlaylist,
   moveEntry,
+  openPlaylistPicker,
   playlistById,
   removeEntry,
   resolvePlaylist,
@@ -43,6 +46,37 @@ function onRemove(index: number): void {
 
 function onMove(index: number, delta: number): void {
   if (pl.value) void moveEntry(pl.value.id, index, index + delta);
+}
+
+/** 歌单内歌曲右键菜单 */
+function rowMenu(e: MouseEvent, index: number): void {
+  const r = resolved.value[index];
+  if (!r) return;
+  const t = r.track;
+  const items: CtxItem[] = [];
+  if (t) {
+    items.push(
+      { label: "播放", icon: "play", action: () => playRow(index) },
+      {
+        label: "查看专辑",
+        icon: "album",
+        action: () => openAlbum(`${t.albumArtist || t.artist}\u{1}${t.album}`),
+      },
+      { label: "查看艺人", icon: "artist", action: () => openArtist(t.artist) },
+      { label: "加入其他歌单", icon: "playlist", action: () => openPlaylistPicker([t.id]) },
+      {
+        label: "导出为 TMC 音乐包",
+        icon: "export",
+        action: () => void exportTrackTmc(t.id, t.title, t.artist),
+      },
+    );
+  }
+  if (index > 0) items.push({ label: "上移", action: () => onMove(index, -1) });
+  if (pl.value && index < pl.value.entries.length - 1) {
+    items.push({ label: "下移", action: () => onMove(index, 1) });
+  }
+  items.push({ label: "从列表移除(不删文件)", danger: true, action: () => onRemove(index) });
+  openCtx(e, items);
 }
 </script>
 
@@ -96,6 +130,7 @@ function onMove(index: number, delta: number): void {
         class="row"
         :class="{ missing: !r.track }"
         @click="playRow(r.index)"
+        @contextmenu="rowMenu($event, r.index)"
       >
         <span class="idx">{{ r.index + 1 }}</span>
         <span class="cov">
