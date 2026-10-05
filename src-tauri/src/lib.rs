@@ -1998,6 +1998,13 @@ fn norm_path(p: &str) -> String {
 fn safe_manifest_part(part: &str) -> Option<String> {
     use std::path::Component;
     let normalized = part.replace('\\', "/");
+    // Windows 盘符前缀(C:/...)在非 Windows 平台不是 Prefix 组件而是普通名字,
+    // 必须手动识别,否则 Linux 上会让 "C:/evil" 混过校验(冒号在 Windows
+    // 文件名里本就非法,不存在误伤的合法目录名)
+    let b = normalized.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return None;
+    }
     let mut out: Vec<&str> = Vec::new();
     for c in Path::new(&normalized).components() {
         match c {
