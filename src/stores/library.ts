@@ -460,10 +460,11 @@ export async function enrichAlbumNetease(key: string): Promise<void> {
     const parts: string[] = [];
     if (r.cover) parts.push("封面已更新");
     if (r.lyrics) {
+      const extras: string[] = [];
+      if (r.lyricsLrclib) extras.push(`LRCLIB ${r.lyricsLrclib}`);
+      if (r.lyricsKuwo) extras.push(`酷我 ${r.lyricsKuwo}`);
       parts.push(
-        r.lyricsLrclib
-          ? `补全 ${r.lyrics} 首歌词(LRCLIB 兜底 ${r.lyricsLrclib} 首)`
-          : `补全 ${r.lyrics} 首歌词`,
+        extras.length ? `补全 ${r.lyrics} 首歌词(${extras.join(" · ")})` : `补全 ${r.lyrics} 首歌词`,
       );
     }
     if (!parts.length) parts.push(r.skipped ? "没有找到可匹配的内容" : "元数据已是最新");

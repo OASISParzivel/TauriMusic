@@ -634,6 +634,8 @@ pub struct NeteaseReport {
     lyrics: u32,
     /// 其中由 LRCLIB 兜底补上的数量(含在 lyrics 内)
     lyrics_lrclib: u32,
+    /// 其中由酷我兜底补上的数量(含在 lyrics 内)
+    lyrics_kuwo: u32,
     skipped: u32,
 }
 
@@ -680,6 +682,7 @@ fn netease_enrich_blocking(
         cover: false,
         lyrics: 0,
         lyrics_lrclib: 0,
+        lyrics_kuwo: 0,
         skipped: 0,
     };
 
@@ -755,7 +758,7 @@ fn netease_enrich_blocking(
         }
     }
 
-    // 歌词:批量并行匹配无 .lrc 的曲目(网易云 → LRCLIB 兜底,每首最多 2+3 次 HTTP 往返)
+    // 歌词:批量并行匹配无 .lrc 的曲目(网易云 → LRCLIB → 酷我 三级兜底)
     let targets: Vec<&model::Track> = tracks.iter().filter(|t| t.lrc_path.is_none()).collect();
     let results: Vec<Option<(String, &'static str)>> = std::thread::scope(|scope| {
         let handles: Vec<_> = targets
@@ -776,6 +779,15 @@ fn netease_enrich_blocking(
                                         Some(t.duration),
                                     )
                                     .map(|text| (text, "lrclib"))
+                                })
+                                .or_else(|| {
+                                    kuwo_lyric(
+                                        &generic_client(),
+                                        &t.title,
+                                        &t.artist,
+                                        Some(t.duration),
+                                    )
+                                    .map(|text| (text, "kuwo"))
                                 })
                         })
                         .collect::<Vec<_>>()
@@ -801,8 +813,10 @@ fn netease_enrich_blocking(
                 if fs::write(&dest, text).is_ok() {
                     touch_audio(Path::new(&t.path));
                     report.lyrics += 1;
-                    if source == "lrclib" {
-                        report.lyrics_lrclib += 1;
+                    match source {
+                        "lrclib" => report.lyrics_lrclib += 1,
+                        "kuwo" => report.lyrics_kuwo += 1,
+                        _ => {}
                     }
                 } else {
                     report.skipped += 1;
@@ -1146,6 +1160,189 @@ pub fn itunes_album_cover(album: &str, album_artist: &str) -> Option<String> {
         return Some(pic);
     }
     None
+}
+
+// ===== 酷我歌词兜底(公开接口,免登录) =====
+
+/// 酷我 r.s 返回单引号伪 JSON,转成严格 JSON:
+/// 仅当引号紧邻结构性字符(前一字符为 {[,: 或后一字符为 }],:)时视为定界符,
+/// 值内部的撇号(Don't)原样保留;找不到定界符时解析会失败并走优雅降级
+fn kuwo_fix_json(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut prev = '\0';
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '\'' {
+            let prev_struct = matches!(prev, '\0' | '{' | '[' | ':' | ',');
+            let mut next = ' ';
+            for &n in &chars[i + 1..] {
+                if !n.is_whitespace() {
+                    next = n;
+                    break;
+                }
+            }
+            let next_struct = matches!(next, '\0' | '}' | ']' | ':' | ',');
+            out.push(if prev_struct || next_struct {
+                '"'
+            } else {
+                '\''
+            });
+        } else {
+            out.push(c);
+        }
+        prev = c;
+    }
+    out
+}
+
+/// 酷我字段里的 HTML 实体解码(&apos; &nbsp; &amp; 等,数字实体一并处理)
+fn html_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find('&') {
+        out.push_str(&rest[..pos]);
+        rest = &rest[pos..];
+        let end = rest.find(';').map(|e| e + 1).unwrap_or(0);
+        if end == 0 || end > 10 {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        }
+        let entity = &rest[..end];
+        let decoded = match entity {
+            "&apos;" | "&#39;" => Some('\''),
+            "&quot;" => Some('"'),
+            "&nbsp;" => Some('\u{a0}'),
+            "&amp;" => Some('&'),
+            "&lt;" => Some('<'),
+            "&gt;" => Some('>'),
+            _ => entity
+                .strip_prefix("&#")
+                .and_then(|n| n.strip_suffix(';'))
+                .and_then(|n| {
+                    u32::from_str_radix(
+                        n.trim_start_matches('x'),
+                        if n.starts_with('x') { 16 } else { 10 },
+                    )
+                    .ok()
+                })
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(c) => {
+                out.push(c);
+                rest = &rest[end..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 把酷我 lrclist(time 为秒字符串)拼成标准 LRC 文本
+fn build_lrc_from_kuwo(lines: &[serde_json::Value]) -> Option<String> {
+    let mut out = String::new();
+    for l in lines {
+        let Some(text) = l["lineLyric"].as_str() else {
+            continue;
+        };
+        let t = l["time"]
+            .as_str()
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .or_else(|| l["time"].as_f64());
+        let Some(t) = t else { continue };
+        let mut m = (t / 60.0).floor() as i64;
+        let mut s = t - m as f64 * 60.0;
+        if s >= 59.995 {
+            m += 1;
+            s = 0.0;
+        }
+        out.push_str(&format!("[{m:02}:{s:05.2}]{text}\n"));
+    }
+    (!out.is_empty()).then(|| out.trim_end().to_string())
+}
+
+/// 酷我歌词兜底:LRCLIB 也没有时再试酷我
+pub fn kuwo_lyric(
+    client: &reqwest::blocking::Client,
+    title: &str,
+    artist: &str,
+    duration: Option<f64>,
+) -> Option<String> {
+    // 1) 搜索(单引号伪 JSON):按「歌名 艺人」检索,取 MUSICRID
+    let resp = client
+        .get("http://search.kuwo.cn/r.s")
+        .query(&[
+            ("all", format!("{title} {artist}")),
+            ("ft", "music".to_string()),
+            ("itemset", "web_2013".to_string()),
+            ("client", "mp".to_string()),
+            ("pn", "0".to_string()),
+            ("rn", "10".to_string()),
+            ("rformat", "json".to_string()),
+            ("encoding", "utf8".to_string()),
+            ("vipver", "MUSIC_8.0.3.2_QQZS".to_string()),
+        ])
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let raw = resp.text().ok()?;
+    let v: serde_json::Value = serde_json::from_str(&kuwo_fix_json(&raw)).ok()?;
+    let list = v["abslist"].as_array()?;
+    let matched: Vec<&serde_json::Value> = list
+        .iter()
+        .filter(|s| {
+            s["ARTIST"]
+                .as_str()
+                .map(|n| artist_matches(artist, &html_unescape(n)))
+                .unwrap_or(false)
+        })
+        .collect();
+    let pool: Vec<&serde_json::Value> = if matched.is_empty() {
+        list.iter().collect()
+    } else {
+        matched
+    };
+    // 优先取时长与本地文件吻合的候选,无吻合时退回首个
+    let pick = pool
+        .iter()
+        .copied()
+        .find(|s| {
+            match (
+                duration,
+                s["DURATION"]
+                    .as_str()
+                    .and_then(|d| d.trim().parse::<f64>().ok()),
+            ) {
+                (Some(d), Some(k)) => (d - k).abs() <= 5.0,
+                _ => false,
+            }
+        })
+        .or_else(|| pool.first().copied())?;
+    let rid = pick["MUSICRID"].as_str()?.trim_start_matches("MUSIC_");
+
+    // 2) 歌词详情:必须带 m 站 Referer,否则报「音乐查询失败」
+    let resp = client
+        .get("http://m.kuwo.cn/newh5/singles/songinfoandlrc")
+        .query(&[("musicId", rid)])
+        .header(
+            reqwest::header::REFERER,
+            "https://m.kuwo.cn/newh5/singles/songinfoandlrc",
+        )
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().ok()?;
+    let lines = v["data"]["lrclist"].as_array()?;
+    build_lrc_from_kuwo(lines)
 }
 
 // ===== 格式关联(HKCU 注册到"打开方式",无需管理员) =====
@@ -2201,6 +2398,32 @@ mod tests {
             pick_lrclib_result(&t2, "陈奕迅", None).as_deref(),
             Some("[00:02.00] y")
         );
+    }
+
+    #[test]
+    fn kuwo_helpers_parse_pseudo_json_and_lrc() {
+        use super::{build_lrc_from_kuwo, html_unescape, kuwo_fix_json};
+
+        // 伪 JSON → 严格 JSON:定界引号转换,值内撇号保留
+        let raw = "{'ARTIST':'Don&apos;T STOP','DURATION':'324','abslist':[{'A':'x'},{'B':'y'}]}";
+        let fixed = kuwo_fix_json(raw);
+        let v: serde_json::Value = serde_json::from_str(&fixed).unwrap();
+        assert_eq!(v["abslist"][1]["B"], "y");
+        // HTML 实体解码
+        assert_eq!(html_unescape("Don&apos;T&nbsp;STOP"), "Don'T\u{a0}STOP");
+        assert_eq!(html_unescape("&#39;ok&#x26;"), "'ok&");
+        // lrclist → LRC 文本
+        let lines = vec![
+            serde_json::json!({"lineLyric": "今天我", "time": "19.34"}),
+            serde_json::json!({"lineLyric": "寒夜里看雪飘过", "time": "75"}),
+            serde_json::json!({"lineLyric": "", "time": "80"}),
+        ];
+        assert_eq!(
+            build_lrc_from_kuwo(&lines).as_deref(),
+            Some("[00:19.34]今天我\n[01:15.00]寒夜里看雪飘过\n[01:20.00]")
+        );
+        // 空列表 → None
+        assert_eq!(build_lrc_from_kuwo(&[]), None);
     }
 
     #[test]
