@@ -24,8 +24,9 @@ const volFill = computed(() => `${player.volume * 100}%`);
 </script>
 
 <template>
-  <header class="topbar" data-tauri-drag-region>
-    <div class="brand" data-tauri-drag-region>
+  <!-- deep: 整个顶栏都是拖拽区,按钮/滑杆等可点击控件自动豁免(Tauri 2.12 drag.js 规则) -->
+  <header class="topbar" data-tauri-drag-region="deep">
+    <div class="brand">
       <span class="logo">
         <svg viewBox="0 0 24 24">
           <path d="M9.3 17.6V6.9l9.4-2v10.5" fill="none" stroke="#fff" stroke-width="1.9" stroke-linejoin="round" />
