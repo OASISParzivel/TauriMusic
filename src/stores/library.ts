@@ -127,7 +127,7 @@ export async function reloadLibrary(): Promise<void> {
   await initLibrary();
 }
 
-/** 监听文件拖进窗口:.tmc 音乐包走解包导入,文件夹登记扫描,散装音频/歌词复制进导入目录 */
+/** 监听文件拖进窗口:.tmca 专辑包/.tmc 音乐包走解包导入,文件夹登记扫描,散装音频/歌词复制进导入目录 */
 export async function initDragImport(): Promise<void> {
   try {
     await getCurrentWebview().onDragDropEvent((e) => {
@@ -149,12 +149,29 @@ export function flashStatus(text: string): void {
 
 export async function importDropped(paths: string[]): Promise<void> {
   const before = new Set(lib.tracks.map((t) => t.id));
+  const tmca = paths.filter((p) => p.toLowerCase().endsWith(".tmca"));
   const tmcl = paths.filter((p) => p.toLowerCase().endsWith(".tmcl"));
   const tmc = paths.filter((p) => p.toLowerCase().endsWith(".tmc"));
   const rest = paths.filter(
-    (p) => !p.toLowerCase().endsWith(".tmc") && !p.toLowerCase().endsWith(".tmcl"),
+    (p) => ![".tmc", ".tmcl", ".tmca"].some((e) => p.toLowerCase().endsWith(e)),
   );
   const parts: string[] = [];
+  if (tmca.length) {
+    let ok = 0;
+    let fail = 0;
+    const names: string[] = [];
+    for (const p of tmca) {
+      try {
+        names.push(await api.importTmca(p));
+        ok++;
+      } catch (err) {
+        console.error("导入 TMCA 失败", err);
+        fail++;
+        parts.push(`专辑导入失败: ${String(err)}`);
+      }
+    }
+    if (ok) parts.push(`导入专辑「${names.join("」「")}」${fail ? ` · ${fail} 个失败` : ""}`);
+  }
   if (tmcl.length) {
     let ok = 0;
     let fail = 0;
@@ -447,6 +464,16 @@ export async function exportPlaylistTmcl(playlistId: string, name: string): Prom
   await runExport(`播放列表 · ${name}`, 1, async () => {
     exportState.current = name;
     const f = await api.stageTmcl(playlistId, exportState.stageDir);
+    exportState.done = 1;
+    return [f];
+  });
+}
+
+/** 导出整张专辑为 .tmca 专辑包(单文件;导入只入库,专辑归类由元数据成立) */
+export async function exportAlbumTmca(albumKey: string, name: string): Promise<void> {
+  await runExport(`整张专辑 · ${name}`, 1, async () => {
+    exportState.current = name;
+    const f = await api.stageTmca(albumKey, exportState.stageDir);
     exportState.done = 1;
     return [f];
   });

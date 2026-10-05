@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { albumByKey, enrichAlbumNetease, deleteTracks, exportTracksTmc } from "../stores/library";
+import { albumByKey, enrichAlbumNetease, deleteTracks, exportAlbumTmca } from "../stores/library";
 import { useConfirmableAction } from "../composables/useConfirmableAction";
 import { playTracks, setMode } from "../stores/player";
 import { ui, go } from "../stores/ui";
@@ -35,14 +35,10 @@ function onEnrich(): void {
   void enrichAlbumNetease(album.value.key).finally(() => (enriching.value = false));
 }
 
-/** 整张专辑导出为 TMC 音乐包(每首一个,存到所选文件夹) */
+/** 整张专辑导出为 .tmca 专辑包(单文件,导入自动入库并归到专辑) */
 function onExportAlbum(): void {
   if (!album.value) return;
-  void exportTracksTmc(
-    album.value.tracks.map((t) => t.id),
-    album.value.tracks,
-    "整张专辑",
-  );
+  void exportAlbumTmca(album.value.key, album.value.album);
 }
 
 /** 删除整张专辑(两段确认,确认后回到专辑列表) */
@@ -83,7 +79,7 @@ function onDeleteAlbum(): void {
           <button class="ghost-pill" @click="shuffleAll">随机播放</button>
           <button
             class="ghost-pill"
-            title="每首歌打包成一个 TMC 音乐包,存到所选文件夹"
+            title="整张专辑打包成单个 .tmca 专辑包(7z 存储模式,打包接近拷贝速度)"
             @click="onExportAlbum"
           >
             导出专辑

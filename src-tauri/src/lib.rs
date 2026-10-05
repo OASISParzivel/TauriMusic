@@ -403,6 +403,8 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
                     .unwrap_or_else(|| p.to_string_lossy().to_string());
                 let result = if ext == "tmc" {
                     import_tmc_file(p, &app).map(|_| ())
+                } else if ext == "tmca" {
+                    import_tmca_blocking(&p.to_string_lossy(), &app).map(|_| ())
                 } else if ext == "tmcl" {
                     import_playlist_tmcl_blocking(&p.to_string_lossy(), &app).map(|_| ())
                 } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
@@ -474,9 +476,6 @@ async fn stage_tmc(id: String, staging: String, app: tauri::AppHandle) -> Result
 }
 
 fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Result<String, String> {
-    use sevenz_rust2::encoder_options::{EncoderOptions, Lzma2Options};
-    use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod};
-
     // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
     if !staging.is_dir() {
         return Err("导出已取消".into());
@@ -518,39 +517,14 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
     )
     .map_err(|e| e.to_string())?;
 
-    // 7z 先写入工作目录,打包封口后落进暂存区,用户目录不会出现半成品
-    let tmp_archive = workspace.join(format!("{stem}.tmc"));
-    let _ = fs::remove_file(&tmp_archive);
-    let mut writer =
-        ArchiveWriter::create(&tmp_archive).map_err(|e| format!("创建 TMC 失败: {e}"))?;
-    // 音频本身已是压缩格式,LZMA2 默认 8MiB 字典对它几乎无收益纯烧 CPU:
-    // 字典降到 1MiB 导出明显提速、编码器更省内存;标准 7z 方法,解包兼容性不变
-    let mut lzma2 = Lzma2Options::default();
-    lzma2.set_dictionary_size(1 << 20);
-    writer
-        .set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::LZMA2)
-            .with_options(EncoderOptions::Lzma2(lzma2))]);
-    // 打开失败必须报错:SevenZWriter 收到 None reader 会静默写入 size=0 的空条目,
-    // 产出损坏的 .tmc(典型场景:音频正被播放器占用)
-    let audio_file =
-        fs::File::open(audio).map_err(|e| format!("打开音频失败 {}: {e}", audio.display()))?;
-    writer
-        .push_archive_entry(
-            ArchiveEntry::from_path(audio, format!("{stem}.{ext}")),
-            Some(audio_file),
-        )
-        .map_err(|e| e.to_string())?;
+    // 条目先收集成表再打包;打开失败必须报错,不给 SevenZWriter 静默写空条目的机会
+    let mut assets: Vec<(String, PathBuf)> = Vec::new();
+    fs::File::open(audio).map_err(|e| format!("打开音频失败 {}: {e}", audio.display()))?;
+    assets.push((format!("{stem}.{ext}"), audio.to_path_buf()));
     if let Some(lrc) = &t.lrc_path {
         let lrc_path = Path::new(lrc);
         if lrc_path.is_file() {
-            let lrc_file = fs::File::open(lrc_path)
-                .map_err(|e| format!("打开歌词失败 {}: {e}", lrc_path.display()))?;
-            writer
-                .push_archive_entry(
-                    ArchiveEntry::from_path(lrc_path, format!("{stem}.lrc")),
-                    Some(lrc_file),
-                )
-                .map_err(|e| e.to_string())?;
+            assets.push((format!("{stem}.lrc"), lrc_path.to_path_buf()));
         }
     }
     if let Some(cover) = &t.cover {
@@ -565,24 +539,15 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
             } else {
                 "cover.jpg"
             };
-            let cover_file = fs::File::open(cover_path)
-                .map_err(|e| format!("打开封面失败 {}: {e}", cover_path.display()))?;
-            writer
-                .push_archive_entry(
-                    ArchiveEntry::from_path(cover_path, cname.to_string()),
-                    Some(cover_file),
-                )
-                .map_err(|e| e.to_string())?;
+            assets.push((cname.to_string(), cover_path.to_path_buf()));
         }
     }
-    let meta_file = fs::File::open(&meta_path).map_err(|e| format!("打开临时元数据失败: {e}"))?;
-    writer
-        .push_archive_entry(
-            ArchiveEntry::from_path(&meta_path, "meta.json".to_string()),
-            Some(meta_file),
-        )
-        .map_err(|e| e.to_string())?;
-    writer.finish().map_err(|e| format!("写入 TMC 失败: {e}"))?;
+    assets.push(("meta.json".to_string(), meta_path));
+
+    // 7z 先写入工作目录,打包封口后落进暂存区,用户目录不会出现半成品
+    let tmp_archive = workspace.join(format!("{stem}.tmc"));
+    let _ = fs::remove_file(&tmp_archive);
+    write_archive_with_progress(app, &tmp_archive, &assets, "TMC")?;
     // 同一批次里同标题的歌在暂存区内自动加序号,落位时再按目标目录去重
     let staged = dedup_dest(staging.join(format!("{stem}.tmc")));
     place_archive(&tmp_archive, &staged)?;
@@ -594,7 +559,7 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
 async fn pick_tmc_file() -> Option<String> {
     rfd::AsyncFileDialog::new()
         .set_title("选择音乐包(TMC / TMCL)")
-        .add_filter("音乐包 (*.tmc, *.tmcl)", &["tmc", "tmcl"])
+        .add_filter("音乐包 (*.tmc, *.tmcl, *.tmca)", &["tmc", "tmcl", "tmca"])
         .pick_file()
         .await
         .map(|f| f.path().to_string_lossy().to_string())
@@ -650,6 +615,291 @@ async fn place_staged(files: Vec<String>, dest_dir: String) -> Result<Vec<String
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 把资源表写进暂存区压缩包(进度按条目上报)。
+/// 音频本身已是压缩格式,采用 7z 的 Copy(存储)方法:打包接近纯拷贝速度,
+/// meta/歌词体积可忽略;标准 7z 方法,任何解压工具可读
+fn write_archive_with_progress(
+    app: &tauri::AppHandle,
+    tmp_archive: &Path,
+    assets: &[(String, PathBuf)],
+    what: &str,
+) -> Result<(), String> {
+    use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod};
+    let mut writer =
+        ArchiveWriter::create(tmp_archive).map_err(|e| format!("创建 {what} 失败: {e}"))?;
+    writer.set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::COPY)]);
+    for (i, (name, path)) in assets.iter().enumerate() {
+        let _ = app.emit(
+            "export-progress",
+            serde_json::json!({ "done": i, "total": assets.len() }),
+        );
+        let file =
+            fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
+        writer
+            .push_archive_entry(ArchiveEntry::from_path(path, name.clone()), Some(file))
+            .map_err(|e| e.to_string())?;
+    }
+    writer
+        .finish()
+        .map_err(|e| format!("写入 {what} 失败: {e}"))?;
+    Ok(())
+}
+
+/// 导出资源表:包内条目名 → 源文件路径
+type ExportAssets = Vec<(String, PathBuf)>;
+/// 规划结果:(资源表, manifest 的 tracks 节点)
+type PlannedAssets = (ExportAssets, Vec<serde_json::Value>);
+
+/// 把曲目按「music/NN. 名字」规划进导出资源表:每首一个子目录,内含音频、
+/// 同名 .lrc、专属封面与 meta.json(供扫描器补齐无内嵌标签的文件)。
+/// TMCL 与 TMCA 的打包共用此规划;音频文件缺失的条目静默跳过
+fn plan_track_assets(tracks: &[model::Track], workspace: &Path) -> Result<PlannedAssets, String> {
+    let mut assets: Vec<(String, PathBuf)> = Vec::new();
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for (i, t) in tracks.iter().enumerate() {
+        let audio = Path::new(&t.path);
+        if !audio.is_file() {
+            continue; // 文件缺失的条目静默跳过(名称已在曲库核对过)
+        }
+        let ext = audio
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase().to_string())
+            .unwrap_or_else(|| "mp3".into());
+        let stem = format!("{} - {}", sanitize_name(&t.title), sanitize_name(&t.artist));
+        let folder = format!("music/{:02}. {stem}", i + 1);
+        let audio_name = format!("{stem}.{ext}");
+
+        assets.push((format!("{folder}/{audio_name}"), audio.to_path_buf()));
+        let mut item = serde_json::json!({
+            "dir": folder,
+            "audio": audio_name,
+            "title": t.title,
+            "artist": t.artist,
+            "album": t.album,
+            "albumArtist": t.album_artist,
+            "duration": t.duration,
+        });
+        if let Some(lrc) = &t.lrc_path {
+            let lp = Path::new(lrc);
+            if lp.is_file() {
+                let lrc_name = format!("{stem}.lrc");
+                assets.push((format!("{folder}/{lrc_name}"), lp.to_path_buf()));
+                item["lrc"] = serde_json::json!(lrc_name);
+            }
+        }
+        if let Some(cover) = &t.cover {
+            let cp = Path::new(cover);
+            if cp.is_file() {
+                let cext = cp
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase().to_string())
+                    .unwrap_or_else(|| "jpg".into());
+                let cover_name = format!("{stem}.cover.{cext}");
+                assets.push((format!("{folder}/{cover_name}"), cp.to_path_buf()));
+                item["cover"] = serde_json::json!(cover_name);
+            }
+        }
+        // meta.json 供扫描器补齐无内嵌标签的文件;写在临时目录再随包
+        let meta_dir = workspace.join(format!("{i:02}"));
+        fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
+        let meta = serde_json::json!({
+            "title": t.title,
+            "artist": t.artist,
+            "album": t.album,
+            "albumArtist": t.album_artist,
+            "year": t.year,
+            "trackNo": t.track_no,
+            "genre": t.genre,
+        });
+        let meta_path = meta_dir.join("meta.json");
+        fs::write(
+            &meta_path,
+            serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        assets.push((format!("{folder}/meta.json"), meta_path));
+
+        items.push(item);
+    }
+    Ok((assets, items))
+}
+
+// ===== TMCA 专辑包(.tmcl 的专辑版:单文件整张专辑,导入只入库不建歌单) =====
+
+/// 把整张专辑打包进导出暂存区(不落位),返回暂存文件路径
+#[tauri::command]
+async fn stage_tmca(
+    album_key: String,
+    staging: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        stage_tmca_blocking(&album_key, Path::new(&staging), &app)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn stage_tmca_blocking(
+    album_key: &str,
+    staging: &Path,
+    app: &tauri::AppHandle,
+) -> Result<String, String> {
+    // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
+    if !staging.is_dir() {
+        return Err("导出已取消".into());
+    }
+    let state = app.state::<AppState>();
+    let mut tracks: Vec<model::Track> = {
+        let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        lib.tracks
+            .iter()
+            .filter(|t| format!("{}\u{1}{}", t.album_artist, t.album) == album_key)
+            .cloned()
+            .collect()
+    };
+    // 与专辑详情页一致的排序:碟号 → 曲目号 → 标题
+    tracks.sort_by(|a, b| {
+        (
+            a.disc_no.unwrap_or(1),
+            a.track_no.unwrap_or(0),
+            a.title.as_str(),
+        )
+            .cmp(&(
+                b.disc_no.unwrap_or(1),
+                b.track_no.unwrap_or(0),
+                b.title.as_str(),
+            ))
+    });
+    // 音频缺失的曲目不能进专辑包,先滤掉(全部缺失时报错)
+    tracks.retain(|t| Path::new(&t.path).is_file());
+    if tracks.is_empty() {
+        return Err("专辑中没有可导出的文件".into());
+    }
+    let album_name = tracks[0].album.clone();
+
+    let workspace = staging.join(".tmp");
+    let _ = fs::remove_dir_all(&workspace);
+    fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
+
+    let (mut assets, items) = plan_track_assets(&tracks, &workspace)?;
+
+    let manifest = serde_json::json!({
+        "format": "tmca",
+        "version": 1,
+        "name": album_name,
+        "albumArtist": tracks[0].album_artist,
+        "year": tracks[0].year,
+        "genre": tracks[0].genre,
+        "createdAt": now_secs(),
+        "tracks": items,
+    });
+    let manifest_path = workspace.join("album.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    assets.insert(0, ("album.json".to_string(), manifest_path));
+
+    // 7z 写进暂存区工作目录,写入进度按资源数上报;封口后落进暂存区顶层
+    let tmp_archive = workspace.join("album.tmca");
+    write_archive_with_progress(app, &tmp_archive, &assets, "TMCA")?;
+    // 包名取清洗后的专辑名;与暂存区内已有文件重名时自动加序号
+    let staged = dedup_dest(staging.join(format!("{}.tmca", sanitize_name(&album_name))));
+    place_archive(&tmp_archive, &staged)?;
+    let _ = fs::remove_dir_all(&workspace);
+    Ok(staged.to_string_lossy().to_string())
+}
+
+/// 依据 manifest 的 tracks 字段为每个子目录写 meta.json(扫描器据此补齐无内嵌标签的文件)。
+/// 包内自带的 meta.json 信息更全(含 year/trackNo/genre),已存在时不覆盖
+fn write_manifest_meta_files(dest: &Path, tracks_json: &[serde_json::Value]) {
+    for item in tracks_json {
+        let Some(dir) = item
+            .get("dir")
+            .and_then(|x| x.as_str())
+            .and_then(safe_manifest_part)
+        else {
+            continue;
+        };
+        let dir_path = dest.join(dir);
+        let _ = fs::create_dir_all(&dir_path);
+        let meta_path = dir_path.join("meta.json");
+        if meta_path.is_file() {
+            continue;
+        }
+        let meta = serde_json::json!({
+            "title": item.get("title"),
+            "artist": item.get("artist"),
+            "album": item.get("album"),
+            "albumArtist": item.get("albumArtist"),
+        });
+        let _ = fs::write(
+            meta_path,
+            serde_json::to_string_pretty(&meta).unwrap_or_default(),
+        );
+    }
+}
+
+/// 导入 .tmca 专辑包:解包到导入目录 → 扫描入库;专辑归类由元数据成立,不建歌单
+#[tauri::command]
+async fn import_tmca(path: String, app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || import_tmca_blocking(&path, &app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn import_tmca_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, String> {
+    let src = Path::new(path);
+    if !src.is_file() {
+        return Err("文件不存在".into());
+    }
+    let state = app.state::<AppState>();
+    let stem = src
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "album".into());
+    let import_dir = state.data_dir.join(IMPORT_DIR_NAME);
+    fs::create_dir_all(&import_dir).map_err(|e| e.to_string())?;
+    let dest = import_dir.join(sanitize_name(&stem));
+    if dest.exists() {
+        fs::remove_dir_all(&dest).map_err(|e| format!("清理旧目录失败: {e}"))?;
+    }
+    fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    sevenz_rust2::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
+
+    let manifest_path = dest.join("album.json");
+    if !manifest_path.is_file() {
+        return Err("不是有效的 TMCA:缺少 album.json".into());
+    }
+    let v: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("album.json 解析失败: {e}"))?;
+    if v.get("format").and_then(|x| x.as_str()) != Some("tmca") {
+        return Err("不是有效的 TMCA:format 不符".into());
+    }
+    let album_name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .unwrap_or_else(|| stem.clone());
+    let tracks_json = v
+        .get("tracks")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // 为无内嵌标签的文件补 meta.json(扫描器据此补齐元数据)
+    write_manifest_meta_files(&dest, &tracks_json);
+
+    // 扫描入库(与拖拽导入同一路径);专辑归类由 meta.json/内嵌标签成立
+    scanner::run_scan(app)?;
+    let _ = app.emit("library-changed", ());
+    Ok(album_name)
 }
 
 // ===== 在线元数据补全(网易云公开接口,仅补封面/歌词,不涉及流媒体) =====
@@ -1821,9 +2071,6 @@ fn stage_tmcl_blocking(
     staging: &Path,
     app: &tauri::AppHandle,
 ) -> Result<String, String> {
-    use sevenz_rust2::encoder_options::{EncoderOptions, Lzma2Options};
-    use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod};
-
     // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
     if !staging.is_dir() {
         return Err("导出已取消".into());
@@ -1859,73 +2106,7 @@ fn stage_tmcl_blocking(
     let _ = fs::remove_dir_all(&workspace);
     fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
 
-    let mut manifest_tracks: Vec<serde_json::Value> = Vec::new();
-    let mut assets: Vec<(String, PathBuf)> = Vec::new();
-    for (i, t) in tracks.iter().enumerate() {
-        let audio = Path::new(&t.path);
-        if !audio.is_file() {
-            continue; // 文件缺失的条目静默跳过(名称已在曲库核对过)
-        }
-        let ext = audio
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase().to_string())
-            .unwrap_or_else(|| "mp3".into());
-        let stem = format!("{} - {}", sanitize_name(&t.title), sanitize_name(&t.artist));
-        let folder = format!("music/{:02}. {stem}", i + 1);
-        let audio_name = format!("{stem}.{ext}");
-
-        assets.push((format!("{folder}/{audio_name}"), audio.to_path_buf()));
-        let mut item = serde_json::json!({
-            "dir": folder,
-            "audio": audio_name,
-            "title": t.title,
-            "artist": t.artist,
-            "album": t.album,
-            "albumArtist": t.album_artist,
-            "duration": t.duration,
-        });
-        if let Some(lrc) = &t.lrc_path {
-            let lp = Path::new(lrc);
-            if lp.is_file() {
-                let lrc_name = format!("{stem}.lrc");
-                assets.push((format!("{folder}/{lrc_name}"), lp.to_path_buf()));
-                item["lrc"] = serde_json::json!(lrc_name);
-            }
-        }
-        if let Some(cover) = &t.cover {
-            let cp = Path::new(cover);
-            if cp.is_file() {
-                let cext = cp
-                    .extension()
-                    .map(|e| e.to_string_lossy().to_lowercase().to_string())
-                    .unwrap_or_else(|| "jpg".into());
-                let cover_name = format!("{stem}.cover.{cext}");
-                assets.push((format!("{folder}/{cover_name}"), cp.to_path_buf()));
-                item["cover"] = serde_json::json!(cover_name);
-            }
-        }
-        // meta.json 供扫描器补齐无内嵌标签的文件;写在临时目录再随包
-        let meta_dir = workspace.join(format!("{i:02}"));
-        fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
-        let meta = serde_json::json!({
-            "title": t.title,
-            "artist": t.artist,
-            "album": t.album,
-            "albumArtist": t.album_artist,
-            "year": t.year,
-            "trackNo": t.track_no,
-            "genre": t.genre,
-        });
-        let meta_path = meta_dir.join("meta.json");
-        fs::write(
-            &meta_path,
-            serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-        assets.push((format!("{folder}/meta.json"), meta_path));
-
-        manifest_tracks.push(item);
-    }
+    let (mut assets, manifest_tracks) = plan_track_assets(&tracks, &workspace)?;
     if manifest_tracks.is_empty() {
         let _ = fs::remove_dir_all(&workspace);
         return Err("播放列表中没有可导出的文件".into());
@@ -1948,29 +2129,7 @@ fn stage_tmcl_blocking(
 
     // 7z 写进暂存区工作目录,写入进度按资源数上报;封口后落进暂存区顶层
     let tmp_archive = workspace.join("playlist.tmcl");
-    let mut writer =
-        ArchiveWriter::create(&tmp_archive).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
-    // 音频本身已是压缩格式,LZMA2 默认 8MiB 字典对它几乎无收益纯烧 CPU:
-    // 字典降到 1MiB 导出明显提速、编码器更省内存;标准 7z 方法,解包兼容性不变
-    let mut lzma2 = Lzma2Options::default();
-    lzma2.set_dictionary_size(1 << 20);
-    writer
-        .set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::LZMA2)
-            .with_options(EncoderOptions::Lzma2(lzma2))]);
-    for (i, (name, path)) in assets.iter().enumerate() {
-        let _ = app.emit(
-            "export-progress",
-            serde_json::json!({ "done": i, "total": assets.len() }),
-        );
-        let file =
-            fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
-        writer
-            .push_archive_entry(ArchiveEntry::from_path(path, name.clone()), Some(file))
-            .map_err(|e| e.to_string())?;
-    }
-    writer
-        .finish()
-        .map_err(|e| format!("写入 TMCL 失败: {e}"))?;
+    write_archive_with_progress(app, &tmp_archive, &assets, "TMCL")?;
     // 包名取清洗后的列表名;与暂存区内已有文件重名时自动加序号
     let staged = dedup_dest(staging.join(format!("{}.tmcl", sanitize_name(&pl.name))));
     place_archive(&tmp_archive, &staged)?;
@@ -2055,27 +2214,7 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
         .unwrap_or_default();
 
     // 为无内嵌标签的文件写 meta.json(扫描器据此补齐元数据)
-    for item in &tracks_json {
-        let Some(dir) = item
-            .get("dir")
-            .and_then(|x| x.as_str())
-            .and_then(safe_manifest_part)
-        else {
-            continue;
-        };
-        let dir_path = dest.join(dir);
-        let _ = fs::create_dir_all(&dir_path);
-        let meta = serde_json::json!({
-            "title": item.get("title"),
-            "artist": item.get("artist"),
-            "album": item.get("album"),
-            "albumArtist": item.get("albumArtist"),
-        });
-        let _ = fs::write(
-            dir_path.join("meta.json"),
-            serde_json::to_string_pretty(&meta).unwrap_or_default(),
-        );
-    }
+    write_manifest_meta_files(&dest, &tracks_json);
 
     // 扫描入库(与拖拽导入同一路径)
     scanner::run_scan(app)?;
@@ -2164,6 +2303,7 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
 pub const ASSOC_EXTS: &[(&str, &str)] = &[
     ("tmc", "TMC 音乐包"),
     ("tmcl", "TMCL 播放列表"),
+    ("tmca", "TMCA 专辑包"),
     ("mp3", "MP3 音频"),
     ("flac", "FLAC 音频"),
     ("m4a", "M4A 音频"),
@@ -2489,6 +2629,7 @@ pub fn run() {
             make_stage_dir,
             stage_tmc,
             stage_tmcl,
+            stage_tmca,
             place_staged,
             cleanup_stage,
             netease_enrich_album,
@@ -2502,6 +2643,7 @@ pub fn run() {
             remove_playlist_entry,
             move_playlist_entry,
             import_playlist_tmcl,
+            import_tmca,
             get_resource_usage
         ])
         .run(tauri::generate_context!())
@@ -2663,9 +2805,8 @@ mod tests {
     }
 
     #[test]
-    fn tmc_small_dict_archive_roundtrips_via_own_decoder() {
-        // 导出用的 1MiB 字典 LZMA2 配置必须能被应用自身的解包路径读回
-        use sevenz_rust2::encoder_options::{EncoderOptions, Lzma2Options};
+    fn tmc_store_archive_roundtrips_via_own_decoder() {
+        // 导出统一走 Copy(存储)模式,打包结果必须能被应用自身的解包路径读回
         use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderConfiguration, EncoderMethod};
 
         let dir = std::env::temp_dir().join(format!("tm-7z-{}", std::process::id()));
@@ -2676,10 +2817,7 @@ mod tests {
 
         let archive = dir.join("out.tmc");
         let mut writer = ArchiveWriter::create(&archive).unwrap();
-        let mut lzma2 = Lzma2Options::default();
-        lzma2.set_dictionary_size(1 << 20);
-        writer.set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::LZMA2)
-            .with_options(EncoderOptions::Lzma2(lzma2))]);
+        writer.set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::COPY)]);
         let file = fs::File::open(&src).unwrap();
         writer
             .push_archive_entry(

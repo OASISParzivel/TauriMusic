@@ -50,6 +50,13 @@
         "description": "TMCL 播放列表(标准 7z:音乐文件+playlist.json)"
       },
       {
+        "name": "TauriMusic TMCA 专辑",
+        "ext": [
+          "tmca"
+        ],
+        "description": "TMCA 专辑包(标准 7z:整张专辑音乐文件+歌词+封面+album.json)"
+      },
+      {
         "name": "TauriMusic MP3",
         "ext": [
           "mp3"

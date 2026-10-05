@@ -109,6 +109,7 @@ export const api = {
   openImportDir: () => invoke<string>("open_import_dir"),
   importPaths: (paths: string[]) => invoke<ImportReport>("import_paths", { paths }),
   importTmc: (path: string) => invoke<string>("import_tmc", { path }),
+  importTmca: (path: string) => invoke<string>("import_tmca", { path }),
   pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
   pickAudioFiles: () => invoke<string[] | null>("pick_audio_files"),
   pickExportDir: () => invoke<string | null>("pick_export_dir"),
@@ -117,6 +118,8 @@ export const api = {
   stageTmc: (id: string, staging: string) => invoke<string>("stage_tmc", { id, staging }),
   stageTmcl: (playlistId: string, staging: string) =>
     invoke<string>("stage_tmcl", { playlistId, staging }),
+  stageTmca: (albumKey: string, staging: string) =>
+    invoke<string>("stage_tmca", { albumKey, staging }),
   placeStaged: (files: string[], destDir: string) =>
     invoke<string[]>("place_staged", { files, destDir }),
   cleanupStage: (dir: string) => invoke<void>("cleanup_stage", { dir }),

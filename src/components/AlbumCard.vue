@@ -2,7 +2,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Album } from "../stores/library";
 import { playTracks } from "../stores/player";
-import { deleteTracks, exportTracksTmc } from "../stores/library";
+import { deleteTracks, exportAlbumTmca } from "../stores/library";
 import { openCtx } from "../stores/context";
 import { openPlaylistPicker } from "../stores/playlists";
 
@@ -20,14 +20,9 @@ function albumMenu(e: MouseEvent, album: Album): void {
       action: () => openPlaylistPicker(album.tracks.map((t) => t.id)),
     },
     {
-      label: "导出专辑为 TMC 音乐包",
+      label: "导出专辑包(TMCA)",
       icon: "export",
-      action: () =>
-        void exportTracksTmc(
-          album.tracks.map((t) => t.id),
-          album.tracks,
-          "整张专辑",
-        ),
+      action: () => void exportAlbumTmca(album.key, album.album),
     },
     {
       label: "删除(移入回收站)",
