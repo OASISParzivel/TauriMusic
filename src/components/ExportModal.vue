@@ -17,9 +17,9 @@ const packingHint = computed(() => {
     return `正在打包音乐文件 ${exportState.assetDone}/${exportState.assetTotal}`;
   }
   if (exportState.total > 1) {
-    return `正在打包第 ${Math.min(exportState.done + 1, exportState.total)}/${exportState.total} 个音乐包`;
+    return `正在准备第 ${Math.min(exportState.done + 1, exportState.total)}/${exportState.total} 首`;
   }
-  return "正在打包音乐包";
+  return "正在准备音乐包";
 });
 </script>
 
@@ -46,11 +46,11 @@ const packingHint = computed(() => {
         <div class="now">
           <span class="spinner" aria-hidden="true"></span>
           <span class="txt">
-            <span class="name" :title="exportState.current">{{ exportState.current || "准备中…" }}</span>
+            <span class="name" :title="exportState.current">{{ exportState.current || "正在准备…" }}</span>
             <span class="hint">{{ packingHint }}</span>
           </span>
         </div>
-        <p class="note">包裹先在临时区域准备,完成后由您选择位置导出,目标文件夹不会出现半成品。</p>
+        <p class="note">准备在后台进行,完成后点「导出」选择保存位置,文件会一次性完整写入。</p>
       </template>
     </template>
 
@@ -61,23 +61,23 @@ const packingHint = computed(() => {
           <path d="m5 12.5 4.5 4.5L19 8" />
         </svg>
         <div class="row-txt">
-          <span class="name">{{ exportState.files.length }} 个音乐包已就绪</span>
-          <span class="hint">点「导出」选择保存位置,完整文件会立即写入。</span>
+          <span class="name">{{ exportState.files.length }} 个音乐包已准备好</span>
+          <span class="hint">点「导出」选择保存位置,文件会立即完整写入。</span>
         </div>
       </div>
       <div v-if="exportState.packFailed" class="warn">
-        {{ exportState.packFailed }} 首打包失败已跳过(文件缺失或被占用)
+        {{ exportState.packFailed }} 首无法打包(文件缺失或被占用),已跳过
       </div>
     </template>
 
-    <!-- 落位中:把完整包裹写入所选位置 -->
+    <!-- 落位中:把完整的音乐包写入所选位置 -->
     <template v-else-if="exportState.phase === 'placing'">
       <div class="bar">
         <div class="fill indeterminate"></div>
       </div>
       <div class="now">
         <span class="spinner" aria-hidden="true"></span>
-        <span class="txt"><span class="name">正在写入所选位置…</span></span>
+        <span class="txt"><span class="name">正在保存到所选位置…</span></span>
       </div>
     </template>
 
@@ -89,7 +89,7 @@ const packingHint = computed(() => {
         </svg>
         <div class="row-txt">
           <span class="name">已导出 {{ exportState.placed }} 个音乐包</span>
-          <span v-if="exportState.failed" class="hint">{{ exportState.failed }} 个写入失败(位置被占用?)</span>
+          <span v-if="exportState.failed" class="hint">{{ exportState.failed }} 个保存失败(文件被占用)</span>
         </div>
       </div>
       <div v-if="exportState.err && !exportState.placed" class="err">{{ exportState.err }}</div>
