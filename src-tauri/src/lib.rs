@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{
+    ipc::InvokeResponseBody,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State, WindowEvent,
@@ -455,7 +456,9 @@ async fn stage_tmc(id: String, staging: String, app: tauri::AppHandle) -> Result
 }
 
 fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Result<String, String> {
-    use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+    use sevenz_rust::{
+        MethodOptions, SevenZArchiveEntry, SevenZMethod, SevenZMethodConfiguration, SevenZWriter,
+    };
 
     // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
     if !staging.is_dir() {
@@ -503,6 +506,10 @@ fn stage_tmc_blocking(id: &str, staging: &Path, app: &tauri::AppHandle) -> Resul
     let _ = fs::remove_file(&tmp_archive);
     let mut writer =
         SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMC 失败: {e}"))?;
+    // 音频本身已是压缩格式,LZMA2 默认 8MiB 字典对它几乎无收益纯烧 CPU:
+    // 字典降到 1MiB 导出明显提速、编码器更省内存;标准 7z 方法,解包兼容性不变
+    writer.set_content_methods(vec![SevenZMethodConfiguration::new(SevenZMethod::LZMA2)
+        .with_options(MethodOptions::Num(1 << 20))]);
     // 打开失败必须报错:SevenZWriter 收到 None reader 会静默写入 size=0 的空条目,
     // 产出损坏的 .tmc(典型场景:音频正被播放器占用)
     let audio_file =
@@ -1772,7 +1779,9 @@ fn stage_tmcl_blocking(
     staging: &Path,
     app: &tauri::AppHandle,
 ) -> Result<String, String> {
-    use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+    use sevenz_rust::{
+        MethodOptions, SevenZArchiveEntry, SevenZMethod, SevenZMethodConfiguration, SevenZWriter,
+    };
 
     // 用户已取消(暂存目录被清理):拒绝,避免工作目录创建时把暂存目录重建出来
     if !staging.is_dir() {
@@ -1900,6 +1909,10 @@ fn stage_tmcl_blocking(
     let tmp_archive = workspace.join("playlist.tmcl");
     let mut writer =
         SevenZWriter::create(&tmp_archive).map_err(|e| format!("创建 TMCL 失败: {e}"))?;
+    // 音频本身已是压缩格式,LZMA2 默认 8MiB 字典对它几乎无收益纯烧 CPU:
+    // 字典降到 1MiB 导出明显提速、编码器更省内存;标准 7z 方法,解包兼容性不变
+    writer.set_content_methods(vec![SevenZMethodConfiguration::new(SevenZMethod::LZMA2)
+        .with_options(MethodOptions::Num(1 << 20))]);
     for (i, (name, path)) in assets.iter().enumerate() {
         let _ = app.emit(
             "export-progress",
@@ -2224,12 +2237,14 @@ fn set_association(ext: String, enable: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_library(state: State<AppState>) -> serde_json::Value {
-    // 锁内完成序列化:大曲库时避免整库深拷贝再二次序列化
-    match state.lib.lock() {
-        Ok(lib) => serde_json::to_value(&*lib).unwrap_or_default(),
-        Err(e) => serde_json::to_value(&*e.into_inner()).unwrap_or_default(),
-    }
+fn get_library(state: State<AppState>) -> Result<InvokeResponseBody, String> {
+    // 锁内直接序列化成 JSON 字符串原样透传(InvokeResponseBody::Json),
+    // 不再先建整棵 serde_json::Value 树:大曲库时启动/重扫的瞬时内存峰值显著更低;
+    // Json 变体以 application/json 返回,前端 invoke<Library> 拿到的仍是解析好的对象
+    let lib = state.lib.lock().map_err(|_| "曲库状态不可用".to_string())?;
+    serde_json::to_string(&*lib)
+        .map(InvokeResponseBody::Json)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2564,6 +2579,38 @@ mod tests {
             kuwo_keywords("普通标题", "艺人"),
             vec!["普通标题 艺人".to_string()]
         );
+    }
+
+    #[test]
+    fn tmc_small_dict_archive_roundtrips_via_own_decoder() {
+        // 导出用的 1MiB 字典 LZMA2 配置必须能被应用自身的解包路径读回
+        use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+
+        let dir = std::env::temp_dir().join(format!("tm-7z-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("in.bin");
+        fs::write(&src, vec![7u8; 4096]).unwrap();
+
+        let archive = dir.join("out.tmc");
+        let mut writer = SevenZWriter::create(&archive).unwrap();
+        writer.set_content_methods(vec![sevenz_rust::SevenZMethodConfiguration::new(
+            sevenz_rust::SevenZMethod::LZMA2,
+        )
+        .with_options(sevenz_rust::MethodOptions::Num(1 << 20))]);
+        let file = fs::File::open(&src).unwrap();
+        writer
+            .push_archive_entry(
+                SevenZArchiveEntry::from_path(&src, "a.bin".to_string()),
+                Some(file),
+            )
+            .unwrap();
+        writer.finish().unwrap();
+
+        let out = dir.join("roundtrip");
+        sevenz_rust::decompress_file(&archive, &out).unwrap();
+        assert_eq!(fs::read(out.join("a.bin")).unwrap(), vec![7u8; 4096]);
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
