@@ -977,7 +977,7 @@ fn netease_enrich_blocking(
                 )
             });
         match pic_url {
-            Some(pic_url) => match fetch_capped(&generic_client(), &pic_url) {
+            Some(pic_url) => match fetch_capped_allow_http(&generic_client(), &pic_url) {
                 Some(bytes) => {
                     let mut dirs: Vec<PathBuf> = tracks
                         .iter()
@@ -1109,11 +1109,27 @@ fn netease_enrich_blocking(
 /// 封面图片大小上限:URL 来自外部接口的 JSON,不能无限下载落盘
 const COVER_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
-/// 下载封面:仅接受 https(网易云/iTunes/酷我的图源都可走 https),且不超过大小上限。
-/// resp.take 限读防 Content-Length 谎报
-fn fetch_capped(client: &reqwest::blocking::Client, url: &str) -> Option<Vec<u8>> {
+/// 下载封面:不超过大小上限;http 来源的图床先试 https(部分网络对酷我图床的
+/// https 不可达),连接失败再回退同路径 http(图片字节有 20MiB 上限,风险可接受)
+fn fetch_capped_allow_http(client: &reqwest::blocking::Client, url: &str) -> Option<Vec<u8>> {
+    if let Some(rest) = url.strip_prefix("http://") {
+        if let Some(bytes) = fetch_capped_inner(client, &format!("https://{rest}"), true) {
+            return Some(bytes);
+        }
+    }
+    fetch_capped_inner(client, url, false)
+}
+
+fn fetch_capped_inner(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    https_only: bool,
+) -> Option<Vec<u8>> {
     use std::io::Read;
-    if !url.starts_with("https://") {
+    if https_only && !url.starts_with("https://") {
+        return None;
+    }
+    if !url.starts_with("https://") && !url.starts_with("http://") {
         return None;
     }
     let resp = client.get(url).send().ok()?;
@@ -1626,21 +1642,35 @@ fn kuwo_search(
     v["abslist"].as_array().cloned()
 }
 
-/// 酷我歌曲详情(必须带 m 站 Referer,否则报「音乐查询失败」):返回 data 节点
+/// 酷我歌曲详情(必须带 m 站 Referer,否则报「音乐查询失败」):返回 data 节点。
+/// m 站接口不稳定:同一 rid 会随机返回缺 songinfo 的精简响应(实测约半数),
+/// 校验关键字段并重试;重试耗尽时若有歌词行也返回(歌词匹配不依赖 songinfo)
 fn kuwo_song_detail(client: &reqwest::blocking::Client, rid: &str) -> Option<serde_json::Value> {
-    let resp = client
-        .get("https://m.kuwo.cn/newh5/singles/songinfoandlrc")
-        .query(&[("musicId", rid)])
-        .header(
-            reqwest::header::REFERER,
-            "https://m.kuwo.cn/newh5/singles/songinfoandlrc",
-        )
-        .send()
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+    let mut last: Option<serde_json::Value> = None;
+    for _ in 0..3 {
+        let resp = client
+            .get("https://m.kuwo.cn/newh5/singles/songinfoandlrc")
+            .query(&[("musicId", rid)])
+            .header(
+                reqwest::header::REFERER,
+                "https://m.kuwo.cn/newh5/singles/songinfoandlrc",
+            )
+            .send()
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let v: serde_json::Value = resp.json().ok()?;
+        let data = v.get("data").cloned().unwrap_or_default();
+        if data.get("songinfo").is_some() {
+            return Some(data);
+        }
+        if data.get("lrclist").is_some() {
+            last = Some(data);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
-    resp.json::<serde_json::Value>().ok()?.get("data").cloned()
+    last
 }
 
 /// 酷我歌词兜底:LRCLIB 也没有时再试酷我
@@ -1750,11 +1780,8 @@ pub fn kuwo_album_cover(
             continue;
         };
         if let Some(pic) = data["songinfo"]["pic"].as_str() {
-            // 图床同样升级 https:明文通道的图片可被中间人替换
-            return Some(
-                pic.replace("http://", "https://")
-                    .replace("/albumcover/240/", "/albumcover/900/"),
-            );
+            // 图床升级 900 高清;协议保持原样,https 不可达时由下载侧回退 http
+            return Some(pic.replace("/albumcover/240/", "/albumcover/900/"));
         }
     }
     None

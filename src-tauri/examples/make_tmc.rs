@@ -49,6 +49,43 @@ fn main() {
         }
         return;
     }
+    // 调试用:make_tmc cover <标题> <艺人> [时长秒] 验证三级封面兜底与酷我链路
+    if args.get(1).map(|s| s == "cover").unwrap_or(false) {
+        let title = args.get(2).map(|s| s.as_str()).unwrap_or("");
+        let artist = args.get(3).map(|s| s.as_str()).unwrap_or("");
+        let dur: Option<f64> = args.get(4).and_then(|s| s.parse().ok());
+        let show = |u: Option<String>| {
+            u.map(|u| u[..u.len().min(72)].to_string())
+                .unwrap_or_else(|| "未找到".into())
+        };
+        println!(
+            "网易云封面 : {}",
+            show(tauri_music_lib::netease_album_cover(
+                &tauri_music_lib::netease_client(),
+                title,
+                artist,
+                title,
+            ))
+        );
+        println!(
+            "iTunes 封面: {}",
+            show(tauri_music_lib::itunes_album_cover(title, artist))
+        );
+        println!(
+            "酷我封面   : {}",
+            show(tauri_music_lib::kuwo_album_cover(
+                &tauri_music_lib::generic_client(),
+                title,
+                artist,
+                dur,
+            ))
+        );
+        match tauri_music_lib::kuwo_lyric(&tauri_music_lib::generic_client(), title, artist, dur) {
+            Some(l) => println!("酷我歌词   : {}", l.chars().take(60).collect::<String>()),
+            None => println!("酷我歌词   : 未找到"),
+        }
+        return;
+    }
 
     let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../demo");
     std::fs::create_dir_all(&out_dir).expect("创建 demo 目录失败");
