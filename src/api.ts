@@ -54,6 +54,8 @@ export interface ImportReport {
 export interface NeteaseReport {
   cover: boolean;
   lyrics: number;
+  /** 其中由 LRCLIB 兜底补上的数量(含在 lyrics 内) */
+  lyricsLrclib: number;
   skipped: number;
 }
 

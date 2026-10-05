@@ -459,7 +459,13 @@ export async function enrichAlbumNetease(key: string): Promise<void> {
     const r = await api.neteaseEnrichAlbum(key);
     const parts: string[] = [];
     if (r.cover) parts.push("封面已更新");
-    if (r.lyrics) parts.push(`补全 ${r.lyrics} 首歌词`);
+    if (r.lyrics) {
+      parts.push(
+        r.lyricsLrclib
+          ? `补全 ${r.lyrics} 首歌词(LRCLIB 兜底 ${r.lyricsLrclib} 首)`
+          : `补全 ${r.lyrics} 首歌词`,
+      );
+    }
     if (!parts.length) parts.push(r.skipped ? "没有找到可匹配的内容" : "元数据已是最新");
     flashStatus(parts.join(" · "));
   } catch (err) {

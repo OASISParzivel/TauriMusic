@@ -632,6 +632,8 @@ async fn place_staged(files: Vec<String>, dest_dir: String) -> Result<Vec<String
 pub struct NeteaseReport {
     cover: bool,
     lyrics: u32,
+    /// 其中由 LRCLIB 兜底补上的数量(含在 lyrics 内)
+    lyrics_lrclib: u32,
     skipped: u32,
 }
 
@@ -677,13 +679,16 @@ fn netease_enrich_blocking(
     let mut report = NeteaseReport {
         cover: false,
         lyrics: 0,
+        lyrics_lrclib: 0,
         skipped: 0,
     };
 
-    // 封面:存在无封面曲目时才匹配(先按专辑名搜专辑图,再回退按歌名搜歌曲所属专辑图)
+    // 封面:存在无封面曲目时才匹配(网易云搜专辑图 → 搜歌曲图 → iTunes 兜底)
     if tracks.iter().any(|t| t.cover.is_none()) {
         let first = &tracks[0];
-        match netease_album_cover(&client, &first.album, &first.album_artist, &first.title) {
+        let pic_url = netease_album_cover(&client, &first.album, &first.album_artist, &first.title)
+            .or_else(|| itunes_album_cover(&first.album, &first.album_artist));
+        match pic_url {
             Some(pic_url) => match client.get(&pic_url).send() {
                 Ok(resp) if resp.status().is_success() => match resp.bytes() {
                     Ok(bytes) => {
@@ -750,9 +755,9 @@ fn netease_enrich_blocking(
         }
     }
 
-    // 歌词:批量并行匹配无 .lrc 的曲目(每首 2 次 HTTP 往返,串行在大专辑下太慢)
+    // 歌词:批量并行匹配无 .lrc 的曲目(网易云 → LRCLIB 兜底,每首最多 2+3 次 HTTP 往返)
     let targets: Vec<&model::Track> = tracks.iter().filter(|t| t.lrc_path.is_none()).collect();
-    let results: Vec<Option<String>> = std::thread::scope(|scope| {
+    let results: Vec<Option<(String, &'static str)>> = std::thread::scope(|scope| {
         let handles: Vec<_> = targets
             .chunks(4)
             .map(|chunk| {
@@ -760,7 +765,19 @@ fn netease_enrich_blocking(
                 scope.spawn(move || {
                     chunk
                         .iter()
-                        .map(|t| netease_lyric(client, &t.title, &t.artist))
+                        .map(|t| {
+                            netease_lyric(client, &t.title, &t.artist)
+                                .map(|text| (text, "netease"))
+                                .or_else(|| {
+                                    lrclib_lyric(
+                                        &generic_client(),
+                                        &t.title,
+                                        &t.artist,
+                                        Some(t.duration),
+                                    )
+                                    .map(|text| (text, "lrclib"))
+                                })
+                        })
                         .collect::<Vec<_>>()
                 })
             })
@@ -770,9 +787,9 @@ fn netease_enrich_blocking(
             .flat_map(|h| h.join().unwrap_or_default())
             .collect()
     });
-    for (t, text) in targets.iter().zip(results) {
-        match text {
-            Some(text) => {
+    for (t, result) in targets.iter().zip(results) {
+        match result {
+            Some((text, source)) => {
                 let parent = Path::new(&t.path)
                     .parent()
                     .unwrap_or_else(|| Path::new("."));
@@ -784,6 +801,9 @@ fn netease_enrich_blocking(
                 if fs::write(&dest, text).is_ok() {
                     touch_audio(Path::new(&t.path));
                     report.lyrics += 1;
+                    if source == "lrclib" {
+                        report.lyrics_lrclib += 1;
+                    }
                 } else {
                     report.skipped += 1;
                 }
@@ -952,6 +972,180 @@ pub fn netease_lyric(
     let v = resp.json::<serde_json::Value>().ok()?;
     let text = v.pointer("/lrc/lyric")?.as_str()?.trim().to_string();
     (!text.is_empty()).then_some(text)
+}
+
+// ===== LRCLIB 歌词兜底 + iTunes 封面兜底(公开接口,无需密钥) =====
+
+/// 通用 HTTP 客户端(LRCLIB / iTunes 等公开接口):仅带标识 UA,不带网易云的站头
+pub fn generic_client() -> reqwest::blocking::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .user_agent("TauriMusic/0.3.0 (https://github.com/OASISParzivel/TauriMusic)")
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new())
+        })
+        .clone()
+}
+
+/// 从 LRCLIB 搜索结果里挑最佳一条:艺人能对上才要,同步歌词优先、时长接近优先
+fn pick_lrclib_result(
+    items: &[serde_json::Value],
+    artist: &str,
+    duration: Option<f64>,
+) -> Option<String> {
+    let mut best: Option<(u8, String)> = None;
+    for it in items {
+        let Some(name) = it["artistName"].as_str() else {
+            continue;
+        };
+        if !artist_matches(artist, name) {
+            continue;
+        }
+        let synced = it["syncedLyrics"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let plain = it["plainLyrics"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let Some(text) = synced.or(plain) else {
+            continue; // 纯音乐条目两字段皆空,跳过
+        };
+        let mut score = 0u8;
+        if synced.is_some() {
+            score += 2; // 逐行同步歌词比纯文本更有价值
+        }
+        if let (Some(d), Some(t)) = (duration, it["duration"].as_f64()) {
+            if (d - t).abs() <= 3.0 {
+                score += 1; // 时长吻合基本可断定是同一版本
+            }
+        }
+        if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+            best = Some((score, text.to_string()));
+        }
+    }
+    best.map(|(_, text)| text)
+}
+
+/// LRCLIB 歌词兜底:网易云没有时,从这里补逐行同步歌词(或纯文本)
+pub fn lrclib_lyric(
+    client: &reqwest::blocking::Client,
+    title: &str,
+    artist: &str,
+    duration: Option<f64>,
+) -> Option<String> {
+    // 1) /api/get 精确匹配:LRCLIB 直接返回最贴合的一条(带时长时按秒对齐)
+    let mut get = client
+        .get("https://lrclib.net/api/get")
+        .query(&[("artist_name", artist), ("track_name", title)]);
+    if let Some(d) = duration {
+        get = get.query(&[("duration", (d as u64).to_string())]);
+    }
+    if let Ok(resp) = get.send() {
+        if resp.status().is_success() {
+            if let Ok(v) = resp.json::<serde_json::Value>() {
+                // 与网易云同规则:艺人对不上就不用,避免同名歌错配
+                let ok = v["artistName"]
+                    .as_str()
+                    .map(|n| artist_matches(artist, n))
+                    .unwrap_or(false);
+                if ok {
+                    for key in ["syncedLyrics", "plainLyrics"] {
+                        if let Some(text) = v[key].as_str().map(str::trim).filter(|s| !s.is_empty())
+                        {
+                            return Some(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 2) /api/search:先「歌名+艺人」,再退化为仅歌名(结果里按艺人过滤挑最佳)
+    for query in [
+        vec![
+            ("track_name", title.to_string()),
+            ("artist_name", artist.to_string()),
+        ],
+        vec![("q", title.to_string())],
+    ] {
+        let resp = client
+            .get("https://lrclib.net/api/search")
+            .query(&query)
+            .send()
+            .ok()?;
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(v) = resp.json::<serde_json::Value>() else {
+            continue;
+        };
+        let items = v.as_array()?;
+        if let Some(text) = pick_lrclib_result(items, artist, duration) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// iTunes 封面兜底:网易云搜不到的专辑(尤其外语/冷门)从苹果曲库补,
+/// artworkUrl100 换成 1200x1200 高清图;先查中国区再查美区
+pub fn itunes_album_cover(album: &str, album_artist: &str) -> Option<String> {
+    let client = generic_client();
+    let norm_album = normalize_tag(album);
+    for country in ["cn", "us"] {
+        let resp = client
+            .get("https://itunes.apple.com/search")
+            .query(&[
+                ("term", format!("{album_artist} {album}")),
+                ("media", "music".to_string()),
+                ("entity", "album".to_string()),
+                ("limit", "5".to_string()),
+                ("country", country.to_string()),
+            ])
+            .send()
+            .ok()?;
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(v) = resp.json::<serde_json::Value>() else {
+            continue;
+        };
+        let Some(results) = v["results"].as_array() else {
+            continue;
+        };
+        let pic = results
+            .iter()
+            .find(|r| {
+                r["artistName"]
+                    .as_str()
+                    .map(|n| artist_matches(album_artist, n))
+                    .unwrap_or(false)
+                    && r["collectionName"]
+                        .as_str()
+                        .map(|n| {
+                            name_matches(n, album)
+                                || !norm_album.is_empty() && normalize_tag(n).contains(&norm_album)
+                        })
+                        .unwrap_or(false)
+            })
+            .or_else(|| {
+                // 艺人对上但专辑名对不上时也接受(苹果的专辑命名常带后缀,如 "- Single")
+                results.iter().find(|r| {
+                    r["artistName"]
+                        .as_str()
+                        .map(|n| artist_matches(album_artist, n))
+                        .unwrap_or(false)
+                })
+            })?["artworkUrl100"]
+            .as_str()
+            .map(|s| s.replace("100x100bb", "1200x1200bb"))?;
+        return Some(pic);
+    }
+    None
 }
 
 // ===== 格式关联(HKCU 注册到"打开方式",无需管理员) =====
@@ -1976,6 +2170,37 @@ mod tests {
         fs::write(dir.join("song.tmcl"), b"c").unwrap();
         assert_eq!(dedup_dest(dir.join("song.tmcl")), dir.join("song (2).tmcl"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pick_lrclib_result_prefers_synced_and_matching_artist() {
+        use super::pick_lrclib_result;
+        let items = vec![
+            // 艺人对不上:即使有同步歌词也不要
+            serde_json::json!({"artistName": "Other Band", "duration": 300.0,
+                "syncedLyrics": "[00:09.00] wrong", "plainLyrics": "wrong"}),
+            // 艺人对上(大小写归一)+ 纯文本 + 时长吻合
+            serde_json::json!({"artistName": "beyond", "duration": 301.0,
+                "syncedLyrics": null, "plainLyrics": "plain text"}),
+            // 艺人对上(繁体归一)+ 逐行同步歌词:优先于纯文本
+            serde_json::json!({"artistName": "BEYOND", "duration": 300.0,
+                "syncedLyrics": "[00:01.00] line", "plainLyrics": "dup"}),
+        ];
+        assert_eq!(
+            pick_lrclib_result(&items, "beyond", Some(300.0)).as_deref(),
+            Some("[00:01.00] line")
+        );
+        // 查询艺人与所有候选都对不上 → 不挑任何一条
+        assert_eq!(pick_lrclib_result(&items, "陈奕迅", Some(300.0)), None);
+        // 繁简归一化后能对上传统写法的艺人名
+        let t2 = vec![
+            serde_json::json!({"artistName": "陳奕迅", "duration": 200.0,
+            "syncedLyrics": "[00:02.00] y", "plainLyrics": ""}),
+        ];
+        assert_eq!(
+            pick_lrclib_result(&t2, "陈奕迅", None).as_deref(),
+            Some("[00:02.00] y")
+        );
     }
 
     #[test]
