@@ -25,7 +25,8 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      //    .mimosa/.zcode 是安全扫描器的工作目录,高频写入会让 watcher 撞 EBUSY 崩掉
+      ignored: ["**/src-tauri/**", "**/.mimosa/**", "**/.zcode/**"],
     },
   },
 }));

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api, type LyricLine } from "../api";
-import { player, current, toggle, next, prev, seek, fmtTime } from "../stores/player";
+import { player, current, toggle, next, prev, seek, setVolume, fmtTime } from "../stores/player";
 import ModeIcon from "./ModeIcon.vue";
 import { ui } from "../stores/ui";
 
@@ -15,6 +15,7 @@ const bgStyle = computed(() => ({
   "--np-cover": coverUrl.value ? `url("${coverUrl.value}")` : "none",
 }));
 const progress = computed(() => (player.duration > 0 ? (player.position / player.duration) * 100 : 0));
+const volFill = computed(() => `${player.volume * 100}%`);
 
 const synced = ref<LyricLine[] | null>(null);
 const plain = ref<string | null>(null);
@@ -138,28 +139,51 @@ function onSeek(e: Event): void {
     </div>
 
     <div class="bottom">
+      <!-- 三区一行:模式键回到播放控制旁(左),控制组居中,音量在右 -->
       <div class="controls">
-        <ModeIcon class="t-btn" />
-        <button class="t-btn" title="上一曲" @click="prev()">
-          <svg viewBox="0 0 24 24">
-            <path d="M7 5.8v12.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
-            <path d="M18.5 6.3v11.4L9.4 12z" fill="currentColor" />
-          </svg>
-        </button>
-        <button class="t-btn play" :title="player.playing ? '暂停' : '播放'" @click="toggle()">
-          <svg v-if="!player.playing" viewBox="0 0 24 24">
-            <path d="M8.2 5.5v13L19 12z" fill="currentColor" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24">
-            <path d="M7.6 5.5h3.3v13H7.6zM13.2 5.5h3.3v13h-3.3z" fill="currentColor" />
-          </svg>
-        </button>
-        <button class="t-btn" title="下一曲" @click="next()">
-          <svg viewBox="0 0 24 24">
-            <path d="M17 5.8v12.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
-            <path d="M5.5 6.3v11.4L14.6 12z" fill="currentColor" />
-          </svg>
-        </button>
+        <div class="zone left">
+          <ModeIcon class="t-btn" />
+        </div>
+        <div class="zone mid">
+          <button class="t-btn" title="上一曲" @click="prev()">
+            <svg viewBox="0 0 24 24">
+              <path d="M7 5.8v12.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+              <path d="M18.5 6.3v11.4L9.4 12z" fill="currentColor" />
+            </svg>
+          </button>
+          <button class="t-btn play" :title="player.playing ? '暂停' : '播放'" @click="toggle()">
+            <svg v-if="!player.playing" viewBox="0 0 24 24">
+              <path d="M8.2 5.5v13L19 12z" fill="currentColor" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24">
+              <path d="M7.6 5.5h3.3v13H7.6zM13.2 5.5h3.3v13h-3.3z" fill="currentColor" />
+            </svg>
+          </button>
+          <button class="t-btn" title="下一曲" @click="next()">
+            <svg viewBox="0 0 24 24">
+              <path d="M17 5.8v12.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+              <path d="M5.5 6.3v11.4L14.6 12z" fill="currentColor" />
+            </svg>
+          </button>
+        </div>
+        <div class="zone right">
+          <div class="np-volume">
+            <svg class="vol-ico" viewBox="0 0 24 24">
+              <path d="M11.2 4.8 6.8 8.3H4v7.4h2.8l4.4 3.5z" fill="currentColor" />
+              <path d="M14.5 9.3a3.9 3.9 0 0 1 0 5.4M17 7a7.2 7.2 0 0 1 0 10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+            </svg>
+            <input
+              class="range vol"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              :value="player.volume"
+              :style="{ '--fill': volFill }"
+              @input="setVolume(Number(($event.target as HTMLInputElement).value))"
+            />
+          </div>
+        </div>
       </div>
       <div class="seek">
         <span class="time">{{ fmtTime(player.position) }}</span>
@@ -342,10 +366,47 @@ function onSeek(e: Event): void {
   gap: 8px;
   padding: 10px 0 26px;
 }
+/* 音量:与顶栏同款控件,在播放页深色底上用白色轨道/滑块 */
+.np-volume {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.np-volume .vol-ico {
+  width: 16px;
+  height: 16px;
+  color: rgba(255, 255, 255, 0.75);
+}
+.np-volume .vol {
+  width: 130px;
+  background: linear-gradient(
+      to right,
+      #fff var(--fill, 0%),
+      rgba(255, 255, 255, 0.25) var(--fill, 0%)
+  );
+}
+.np-volume .range::-webkit-slider-thumb {
+  background: #fff;
+}
+/* 控制行:与进度条同宽同列——三区(模式键/播放控制/音量)都在进度条的宽度内分布,
+   不再被 stretch 拉到窗口两角;窄窗口时左右区让位给中间的控制组 */
 .controls {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  width: 560px;
+  max-width: 90vw;
+}
+.zone.left {
+  justify-self: start;
+}
+.zone.mid {
   display: flex;
   align-items: center;
   gap: 26px;
+}
+.zone.right {
+  justify-self: end;
 }
 .t-btn {
   width: 28px;
