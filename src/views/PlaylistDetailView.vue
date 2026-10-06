@@ -99,7 +99,6 @@ function rowMenu(e: MouseEvent, index: number): void {
         <div v-else class="ph">♪</div>
       </div>
       <div class="meta-col">
-        <div class="kind">播放列表</div>
         <h1>{{ pl.name }}</h1>
         <div class="sub">
           {{ pl.entries.length }} 首<template v-if="missing"> · {{ missing }} 首文件缺失</template>
@@ -238,12 +237,6 @@ function rowMenu(e: MouseEvent, index: number): void {
 }
 .meta-col {
   min-width: 0;
-}
-.kind {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 0.5px;
 }
 .detail-head h1 {
   font-size: 34px;
