@@ -1,5 +1,5 @@
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -96,6 +96,8 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
         .clamp(1, 8);
     let chunk_size = total.div_ceil(workers).max(1);
     let album_covers: Mutex<HashMap<String, CoverPair>> = Mutex::new(HashMap::new());
+    // 目录旁路文件清单缓存:每个目录一次 read_dir,全部 worker 共享
+    let dir_listings: Mutex<HashMap<PathBuf, DirListing>> = Mutex::new(HashMap::new());
     let done = std::sync::atomic::AtomicUsize::new(0);
 
     let chunk_results: Vec<Vec<Track>> = std::thread::scope(|scope| {
@@ -108,6 +110,7 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
                 let covers_dir = &covers_dir;
                 let app = &app;
                 let album_covers = &album_covers;
+                let dir_listings = &dir_listings;
                 scope.spawn(move || {
                     let mut out: Vec<Track> = Vec::with_capacity(chunk.len());
                     for path in &chunk {
@@ -153,7 +156,11 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
                                 && prev.size == size
                                 && cover_ok
                                 && lrc_ok
-                                && sidecar_mtime(path, prev.cover.as_deref()) <= prev.mtime + 0.5
+                                && {
+                                    let mut listings =
+                                        dir_listings.lock().unwrap_or_else(|e| e.into_inner());
+                                    sidecar_mtime(path, prev.cover.as_deref(), &mut listings)
+                                } <= prev.mtime + 0.5
                                 && !force_full
                             {
                                 out.push(prev.clone());
@@ -233,8 +240,64 @@ pub fn run_scan(app: &AppHandle) -> Result<ScanReport, String> {
         // 静默失败会让内存态与磁盘态分叉
         lib.save(&state.data_dir.join(LIBRARY_FILE))
             .map_err(|e| e.to_string())?;
+        // 封面缓存 GC:清理已删/已移走音乐残留的孤儿缩略图。
+        // 引用集包含回收站快照,还原后封面文件仍在
+        let referenced: HashSet<String> = lib
+            .tracks
+            .iter()
+            .chain(lib.trash.iter().map(|e| &e.track))
+            .filter_map(|t| t.cover.clone())
+            .chain(
+                lib.tracks
+                    .iter()
+                    .chain(lib.trash.iter().map(|e| &e.track))
+                    .filter_map(|t| t.cover_large.clone()),
+            )
+            .collect();
+        gc_cover_cache(&covers_dir, &referenced);
     }
     Ok(report)
+}
+
+/// 缓存封面文件名规则:16 位 hex + 可选 l 后缀(大图)+ 图片扩展名
+fn is_cache_cover_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if !matches!(ext, "jpg" | "jpeg" | "png" | "webp") {
+        return false;
+    }
+    let (hex, _is_large) = match stem.strip_suffix('l') {
+        Some(h) => (h, true),
+        None => (stem, false),
+    };
+    hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// 清理封面缓存里的孤儿文件:命名符合缓存规则但不在引用集内的缩略图删除,
+/// 其他文件(用户自放)一律不动
+fn gc_cover_cache(covers_dir: &Path, referenced: &HashSet<String>) {
+    let Ok(rd) = fs::read_dir(covers_dir) else {
+        return;
+    };
+    for e in rd.filter_map(|e| e.ok()) {
+        let Ok(ft) = e.file_type() else {
+            continue;
+        };
+        if !ft.is_file() {
+            continue;
+        }
+        let name = e.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !is_cache_cover_name(name) {
+            continue;
+        }
+        if !referenced.contains(&covers_dir.join(name).to_string_lossy().to_string()) {
+            let _ = fs::remove_file(covers_dir.join(name));
+        }
+    }
 }
 
 fn parse_track(
@@ -455,36 +518,78 @@ fn write_cover_thumbs(covers_dir: &Path, album_key: &str, data: &[u8]) -> Option
     Some((small, large))
 }
 
-/// 音频旁路元数据文件的最新修改时间(封面 cover.* / {stem}.cover.* 与同名 .lrc),无则 0
-/// 音频旁路元数据文件的最新修改时间(目录封面 + 同名 .lrc + 旧记录指向的实际封面),
-/// 无则 0。目录封面探测范围与 COVER_NAMES 一致,替换 folder.jpg 等同样能触发重扫
-fn sidecar_mtime(path: &Path, prev_cover: Option<&str>) -> f64 {
+/// 目录旁路文件清单:一次 read_dir 拿全部(小写文件名, mtime)
+type DirListing = Vec<(String, f64)>;
+
+/// 读取目录清单并缓存:一个目录只枚举一次,同专辑多曲目共享,
+/// 替代旧实现对每个未变化文件做 20+ 次 metadata 探测
+fn dir_listing(dir: &Path, cache: &mut HashMap<PathBuf, DirListing>) -> DirListing {
+    if let Some(v) = cache.get(dir) {
+        return v.clone();
+    }
+    let mut out: Vec<(String, f64)> = Vec::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let Ok(ft) = e.file_type() else {
+                continue;
+            };
+            if !ft.is_file() {
+                continue;
+            }
+            // 小写存储:Windows 下 cover.jpg/COVER.JPG 语义相同,统一小写匹配
+            let mtime = e
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+            out.push((e.file_name().to_string_lossy().to_lowercase(), mtime));
+        }
+    }
+    cache.insert(dir.to_path_buf(), out.clone());
+    out
+}
+
+/// 音频旁路元数据文件的最新修改时间(目录封面 + {stem}.cover.* + 同名 .lrc + 旧封面文件),
+/// 无则 0。语义与逐个 stat 的旧实现一致(含原地覆写检测),但目录清单按缓存只枚举一次
+fn sidecar_mtime(
+    path: &Path,
+    prev_cover: Option<&str>,
+    cache: &mut HashMap<PathBuf, DirListing>,
+) -> f64 {
     let Some(parent) = path.parent() else {
         return 0.0;
     };
-    let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+    let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_lowercase()) else {
         return 0.0;
     };
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for name in COVER_NAMES {
-        for ext in COVER_EXTS {
-            candidates.push(parent.join(format!("{name}.{ext}")));
+    let listing = dir_listing(parent, cache);
+    let mut max = 0.0f64;
+    for (name, mtime) in &listing {
+        // 候选判定(精确匹配,与旧探测名单一致):目录封面 base.ext / {stem}.cover.ext / {stem}.lrc
+        let is_dir_cover = name
+            .split_once('.')
+            .map(|(base, ext)| COVER_NAMES.contains(&base) && COVER_EXTS.contains(&ext))
+            .unwrap_or(false);
+        let is_stem_cover = COVER_EXTS
+            .iter()
+            .any(|ext| name == &format!("{stem}.cover.{ext}"));
+        let is_lrc = name == &format!("{stem}.lrc");
+        if (is_dir_cover || is_stem_cover || is_lrc) && *mtime > max {
+            max = *mtime;
         }
     }
-    for ext in COVER_EXTS {
-        candidates.push(parent.join(format!("{stem}.cover.{ext}")));
-    }
-    candidates.push(parent.join(format!("{stem}.lrc")));
     if let Some(c) = prev_cover {
-        candidates.push(PathBuf::from(c));
+        if let Ok(m) = fs::metadata(c) {
+            if let Ok(t) = m.modified() {
+                if let Ok(d) = t.duration_since(UNIX_EPOCH) {
+                    max = max.max(d.as_secs_f64());
+                }
+            }
+        }
     }
-    candidates
-        .into_iter()
-        .filter_map(|p| fs::metadata(p).ok())
-        .filter_map(|m| m.modified().ok())
-        .filter_map(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs_f64())
-        .fold(0.0, f64::max)
+    max
 }
 
 pub(crate) fn hash_str(s: &str) -> u64 {
@@ -622,23 +727,56 @@ mod tests {
         let dir = temp_dir("sidecar");
         let audio = dir.join("song.mp3");
         fs::write(&audio, b"x").unwrap();
-        assert_eq!(sidecar_mtime(&audio, None), 0.0);
+        let mut cache: HashMap<PathBuf, DirListing> = HashMap::new();
+        assert_eq!(sidecar_mtime(&audio, None, &mut cache), 0.0);
+        // 每次写入后清缓存 = 模拟一次新扫描(清单是单次扫描内的快照,与生产语义一致)
         fs::write(dir.join("cover.jpg"), b"x").unwrap();
-        assert!(sidecar_mtime(&audio, None) > 0.0);
+        cache.clear();
+        assert!(sidecar_mtime(&audio, None, &mut cache) > 0.0);
         fs::write(dir.join("song.lrc"), b"[00:00]t").unwrap();
         fs::write(dir.join("song.cover.png"), b"x").unwrap();
-        assert!(sidecar_mtime(&audio, None) > 0.0);
+        cache.clear();
+        assert!(sidecar_mtime(&audio, None, &mut cache) > 0.0);
         // 非默认名单的封面(folder.*)也应计入,与目录封面回退逻辑一致
         fs::write(dir.join("folder.jpg"), b"x").unwrap();
-        assert!(sidecar_mtime(&audio, None) > 0.0);
+        cache.clear();
+        assert!(sidecar_mtime(&audio, None, &mut cache) > 0.0);
         // 旧记录指向的实际封面路径(如缓存目录)同样计入
         let elsewhere = temp_dir("sidecar-elsewhere");
         fs::create_dir_all(&elsewhere).unwrap();
         fs::write(elsewhere.join("cached.png"), b"x").unwrap();
         let cached = elsewhere.join("cached.png");
-        assert!(sidecar_mtime(&audio, Some(cached.to_str().unwrap())) > 0.0);
+        assert!(sidecar_mtime(&audio, Some(cached.to_str().unwrap()), &mut cache) > 0.0);
+        // 命中规则的边界:同前缀但非候选名(cover.backup.jpg)不算旁路文件
+        fs::write(dir.join("cover.backup.jpg"), b"x").unwrap();
+        cache.clear();
+        assert!(sidecar_mtime(&audio, None, &mut cache) > 0.0); // folder.jpg 仍在
         fs::remove_dir_all(&dir).ok();
         fs::remove_dir_all(&elsewhere).ok();
+    }
+
+    #[test]
+    fn gc_cover_cache_removes_orphans_only() {
+        let dir = temp_dir("gc");
+        let referenced_a = dir.join("aaaaaaaaaaaaaaaa.jpg");
+        let referenced_b = dir.join("aaaaaaaaaaaaaaaal.jpg");
+        let orphan = dir.join("cccccccccccccccc.jpg");
+        let foreign = dir.join("notes.txt");
+        fs::write(&referenced_a, b"a").unwrap();
+        fs::write(&referenced_b, b"b").unwrap();
+        fs::write(&orphan, b"c").unwrap();
+        fs::write(&foreign, b"n").unwrap();
+
+        let mut referenced = std::collections::HashSet::new();
+        referenced.insert(referenced_a.to_string_lossy().to_string());
+        referenced.insert(referenced_b.to_string_lossy().to_string());
+        gc_cover_cache(&dir, &referenced);
+
+        assert!(referenced_a.is_file(), "引用的保留");
+        assert!(referenced_b.is_file(), "引用的大图保留");
+        assert!(!orphan.exists(), "孤儿缩略图删除");
+        assert!(foreign.is_file(), "非缓存命名的文件不动");
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
