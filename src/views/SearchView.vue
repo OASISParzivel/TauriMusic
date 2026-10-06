@@ -7,9 +7,12 @@ import TrackList from "../components/TrackList.vue";
 import AlbumCard from "../components/AlbumCard.vue";
 import LibGate from "../components/LibGate.vue";
 
+/** 搜索结果渲染上限:命中数千首时全量渲染 DOM 会卡顿吃内存,超出部分提示细化关键词 */
+const SEARCH_LIMIT = 500;
+
 const query = computed(() => ui.search.trim().toLowerCase());
 
-const songs = computed<Track[]>(() => {
+const songsAll = computed<Track[]>(() => {
   const q = query.value;
   if (!q) return [];
   return lib.tracks.filter(
@@ -19,6 +22,7 @@ const songs = computed<Track[]>(() => {
       t.album.toLowerCase().includes(q),
   );
 });
+const songs = computed<Track[]>(() => songsAll.value.slice(0, SEARCH_LIMIT));
 
 const matchedAlbums = computed<Album[]>(() => {
   const q = query.value;
@@ -49,6 +53,9 @@ const nothing = computed(
       <template v-if="query">
       <section v-if="songs.length" class="section">
         <h2>歌曲</h2>
+        <p v-if="songsAll.length > SEARCH_LIMIT" class="limit-hint">
+          共 {{ songsAll.length }} 条命中,已显示前 {{ SEARCH_LIMIT }} 条,请细化关键词
+        </p>
         <TrackList :tracks="songs" show-album show-cover />
       </section>
 
@@ -83,6 +90,11 @@ const nothing = computed(
 </template>
 
 <style scoped>
+.limit-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 10px;
+}
 .section {
   margin-bottom: 30px;
 }

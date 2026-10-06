@@ -35,7 +35,7 @@
 `mp3` `m4a` `flac` `ogg` `opus` `wav`(播放由系统 WebView2 解码器承担)
 
 音乐包/播放列表/专辑容器:`.tmc`(单曲包)、`.tmcl`(歌单包)、`.tmca`(专辑包),均为标准 7z,可用任意解压工具查看。
-打包时逐文件记录 SHA-256(存于 meta.json / playlist.json / album.json),导入时逐文件校验——传输损坏在入库前即被拦截;曲目哈希同时用作内容指纹,与其他包内相同歌曲重复导入时自动跳过。
+打包时逐文件记录 SHA-256(存于 meta.json / playlist.json / album.json,与打包同遍读盘完成),导入时逐文件校验——传输损坏在入库前即被拦截;曲目哈希同时用作内容指纹,音乐包与散装导入互相去重,相同歌曲重复导入自动跳过。
 
 ## 开发
 
@@ -106,7 +106,7 @@ src-tauri/
 
 - 曲库、文件夹配置、播放列表与应用内回收站:`%APPDATA%\com.art3mis.taurimusic\library.json`(写入为原子替换,旧文件保留为 `library.json.bak`)
 - 回收站文件本体:`%APPDATA%\com.art3mis.taurimusic\Trash\`(删除的音乐移到这里,30 天后启动时自动清理)
-- 封面缓存:`%LOCALAPPDATA%\com.art3mis.taurimusic\covers\`(256px 列表图 + 512px 详情图两级缩略图,列表场景解码内存降至 1/4)
+- 封面缓存:`%LOCALAPPDATA%\com.art3mis.taurimusic\covers\`(256px 列表图 + 512px 详情图两级缩略图,列表场景解码内存降至 1/4;每次扫描自动清理已删音乐残留的孤儿缩略图)
 
 删除这两个目录即可完全重置应用。
 
