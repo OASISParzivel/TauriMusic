@@ -320,7 +320,7 @@ export async function enrichAllNetease(): Promise<void> {
   }
 }
 
-/** 直接导入音乐文件:多选 → 复制进导入目录 → 扫描 → 自动在线匹配封面与歌词 */
+/** 直接导入音乐文件:多选 → 复制进导入目录(后端已扫描并记指纹) → 自动在线匹配封面与歌词 */
 export async function importMusicPick(): Promise<void> {
   const paths = await api.pickAudioFiles();
   if (!paths || paths.length === 0) return;
@@ -328,11 +328,11 @@ export async function importMusicPick(): Promise<void> {
   flashStatus(`正在导入 ${paths.length} 个文件…`);
   try {
     const r = await api.importPaths(paths);
+    await refreshLibrary();
     if (!r.filesCopied) {
       flashStatus(r.duplicates ? `全部为重复文件,已跳过 ${r.duplicates} 个` : "没有新文件可导入");
       return;
     }
-    await rescan();
     await enrichNewTracks(before, `已导入 ${r.filesCopied} 个文件`);
   } catch (err) {
     console.error("导入音乐文件失败", err);
