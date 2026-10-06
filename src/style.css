@@ -418,6 +418,33 @@ html.dark.glass .topbar {
     0 18px 50px rgba(0, 0, 0, 0.52);
 }
 
+/* 指针高光:一道跟随光标流动的柔光斑,玻璃"活"起来(screen 混合像光而不是漆);
+   --pointer-* 由 App.vue 的 pointermove(rAF 节流)写入,未移动前落在屏幕外不显示 */
+html.glass .sidebar::after,
+html.glass .topbar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  background: radial-gradient(
+    380px circle at var(--pointer-x, -999px) var(--pointer-y, -999px),
+    rgba(255, 255, 255, 0.14),
+    rgba(255, 255, 255, 0) 65%
+  );
+}
+
+html.dark.glass .sidebar::after,
+html.dark.glass .topbar::after {
+  background: radial-gradient(
+    380px circle at var(--pointer-x, -999px) var(--pointer-y, -999px),
+    rgba(255, 255, 255, 0.07),
+    rgba(255, 255, 255, 0) 65%
+  );
+}
+
 /* 斜向光泽:玻璃面上的一道光带(screen 混合让它像光而不是漆) */
 html.glass .sidebar::before,
 html.glass .topbar::before {

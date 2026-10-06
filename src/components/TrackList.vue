@@ -478,6 +478,13 @@ function rowMenu(e: MouseEvent, t: Track): void {
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
   backdrop-filter: blur(24px) saturate(1.6);
 }
+/* 边缘透镜折射与其他玻璃面一致 */
+@supports (backdrop-filter: url("#glass-refract")) {
+  .sel-bar.glass-fx, html.glass .sel-bar {
+    backdrop-filter: blur(20px) saturate(1.6) url("#glass-refract");
+    -webkit-backdrop-filter: blur(20px) saturate(1.6) url("#glass-refract");
+  }
+}
 .sel-bar.fixed {
   position: fixed;
   left: 50%;

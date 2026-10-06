@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import Sidebar from "./components/Sidebar.vue";
 import TopBar from "./components/TopBar.vue";
@@ -51,6 +51,19 @@ const ambientImg = computed(() => {
 });
 const ambientKey = computed(() => current.value?.id ?? "none");
 
+// 指针驱动的"液态光斑":玻璃面板的高光跟随光标流动(rAF 节流,仅玻璃模式更新)
+let pointerRaf = 0;
+function onPointerMove(e: PointerEvent): void {
+  if (pointerRaf) return;
+  pointerRaf = requestAnimationFrame(() => {
+    pointerRaf = 0;
+    if (!ui.glass) return;
+    const root = document.documentElement;
+    root.style.setProperty("--pointer-x", `${e.clientX}px`);
+    root.style.setProperty("--pointer-y", `${e.clientY}px`);
+  });
+}
+
 onMounted(() => {
   initTheme();
   initGlass();
@@ -58,17 +71,28 @@ onMounted(() => {
   void initLibrary();
   void initDragImport();
   initShortcuts();
+  window.addEventListener("pointermove", onPointerMove, { passive: true });
+});
+onUnmounted(() => {
+  window.removeEventListener("pointermove", onPointerMove);
+  cancelAnimationFrame(pointerRaf);
 });
 </script>
 
 <template>
   <div class="app">
-    <!-- SVG 折射滤镜:供玻璃卡片 backdrop-filter 引用(隐藏元素) -->
+    <!-- SVG 折射滤镜:供玻璃卡片 backdrop-filter 引用(隐藏元素)。
+         两次位移分别做横/纵"透镜"贴图:贴图 R/G 各只有一轴渐变(另一轴恒定 128 不位移),
+         渐变集中在边缘 14%——中心清晰、边缘像真玻璃一样向外弯折。
+         旧实现用 feTurbulence 噪声做位移,噪声颗粒感正是"塑料磨砂"的来源 -->
     <svg class="fx-defs" width="0" height="0" aria-hidden="true" focusable="false">
       <filter id="glass-refract" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
-        <feTurbulence type="fractalNoise" baseFrequency="0.006 0.009" numOctaves="2" seed="7" result="noise" />
-        <feGaussianBlur in="noise" stdDeviation="3" result="soft" />
-        <feDisplacementMap in="SourceGraphic" in2="soft" scale="46" xChannelSelector="R" yChannelSelector="G" />
+        <feImage x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="mapX"
+          href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='rgb(0,128,128)'/%3E%3Cstop offset='0.14' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='0.86' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='1' stop-color='rgb(255,128,128)'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23g)'/%3E%3C/svg%3E" />
+        <feDisplacementMap in="SourceGraphic" in2="mapX" scale="24" xChannelSelector="R" yChannelSelector="G" result="dx" />
+        <feImage x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="mapY"
+          href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='rgb(128,0,128)'/%3E%3Cstop offset='0.14' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='0.86' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='1' stop-color='rgb(128,255,128)'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23g)'/%3E%3C/svg%3E" />
+        <feDisplacementMap in="dx" in2="mapY" scale="24" xChannelSelector="R" yChannelSelector="G" />
       </filter>
     </svg>
 
@@ -163,12 +187,12 @@ onMounted(() => {
 .page-enter-from {
   opacity: 0;
   transform: translateY(14px) scale(0.992);
-  filter: blur(10px);
+  filter: blur(5px);
 }
 .page-leave-to {
   opacity: 0;
   transform: scale(0.996);
-  filter: blur(6px);
+  filter: blur(3px);
 }
 
 /* 全屏播放器:像一层玻璃从底部液化升起 */
@@ -187,12 +211,12 @@ onMounted(() => {
 .np-enter-from {
   opacity: 0;
   transform: translateY(48px) scale(1.015);
-  filter: blur(14px);
+  filter: blur(8px);
 }
 .np-leave-to {
   opacity: 0;
   transform: translateY(30px) scale(0.99);
-  filter: blur(8px);
+  filter: blur(5px);
 }
 
 /* 弹窗过渡:卡片弹簧上浮;遮罩用 background-color 淡入。

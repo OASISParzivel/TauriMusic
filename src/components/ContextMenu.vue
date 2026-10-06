@@ -94,6 +94,17 @@ html.dark.glass .menu {
   background: rgba(30, 30, 36, 0.85);
   backdrop-filter: blur(24px) saturate(1.5);
 }
+/* 边缘透镜折射与其他玻璃面一致 */
+@supports (backdrop-filter: url("#glass-refract")) {
+  html.glass:not(.dark) .menu {
+    backdrop-filter: blur(18px) saturate(1.5) url("#glass-refract");
+    -webkit-backdrop-filter: blur(18px) saturate(1.5) url("#glass-refract");
+  }
+  html.dark.glass .menu {
+    backdrop-filter: blur(22px) saturate(1.4) url("#glass-refract");
+    -webkit-backdrop-filter: blur(22px) saturate(1.4) url("#glass-refract");
+  }
+}
 
 .item {
   display: flex;
