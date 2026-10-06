@@ -1,11 +1,21 @@
 <script setup lang="ts">
+import { ref, onUnmounted } from "vue";
 import { MODE_LABEL, player, type PlayMode } from "../stores/player";
+
+/** 切换后短暂显示模式名气泡:图标变化太含蓄,需要明确的操作反馈 */
+const hint = ref("");
+let hintTimer = 0;
 
 function cycle(): void {
   const order: PlayMode[] = ["seq", "loop", "one", "shuffle"];
   const i = order.indexOf(player.mode);
   player.mode = order[(i + 1) % order.length];
+  hint.value = MODE_LABEL[player.mode];
+  window.clearTimeout(hintTimer);
+  hintTimer = window.setTimeout(() => (hint.value = ""), 1300);
 }
+
+onUnmounted(() => window.clearTimeout(hintTimer));
 
 type Mode = PlayMode;
 const icons: Record<Mode, string[]> = {
@@ -45,6 +55,10 @@ const icons: Record<Mode, string[]> = {
       <path v-if="player.mode === 'one'" d="M10.5 9.5 12 8.6V15" stroke-width="2" />
     </svg>
     <span v-if="player.mode === 'one'" class="badge">1</span>
+    <!-- 模式名气泡:按钮上方浮出,1.3 秒后淡出 -->
+    <Transition name="mode-hint">
+      <span v-if="hint" class="mode-hint">{{ hint }}</span>
+    </Transition>
   </button>
 </template>
 
@@ -69,5 +83,35 @@ const icons: Record<Mode, string[]> = {
   font-size: 8px;
   font-weight: 700;
   color: var(--accent);
+}
+.mode-hint {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(24, 24, 28, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 4px 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 400;
+}
+.mode-hint-enter-active {
+  transition: opacity 0.18s ease, transform 0.22s var(--ease-spring);
+}
+.mode-hint-leave-active {
+  transition: opacity 0.3s ease;
+}
+.mode-hint-enter-from {
+  opacity: 0;
+  transform: translateX(-50%) translateY(4px);
+}
+.mode-hint-leave-to {
+  opacity: 0;
 }
 </style>
