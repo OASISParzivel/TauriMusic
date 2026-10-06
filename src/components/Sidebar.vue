@@ -99,7 +99,7 @@ const statusText = computed(() =>
           <circle cx="18.5" cy="15.5" r="2.2" />
           <path d="M20.7 15.5V9l-3.4.9" />
         </svg>
-        <span class="pl-text muted">全部播放列表</span>
+        <span class="pl-text">全部播放列表</span>
       </button>
     </nav>
 
@@ -321,10 +321,6 @@ html.glass .nav-item.active .ico {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.pl-text.muted {
-  color: var(--text-2);
-  font-weight: 500;
 }
 .pl-all {
   margin-top: 2px;
