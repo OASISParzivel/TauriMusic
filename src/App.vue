@@ -195,21 +195,29 @@ onMounted(() => {
   filter: blur(8px);
 }
 
-/* 弹窗过渡:遮罩淡入,卡片弹簧上浮 */
+/* 弹窗过渡:卡片弹簧上浮;遮罩用 background-color 淡入。
+   遮罩不能动 opacity——overlay 挂着 backdrop-filter,opacity<1 会把元素隔离成
+   backdrop root,模糊瞬间采不到背景,弹窗打开的第一帧窗口整个透底 */
 .modal-enter-active {
-  transition: opacity 0.28s var(--ease-out-soft);
+  transition: background-color 0.28s var(--ease-out-soft);
 }
 .modal-leave-active {
+  transition: background-color 0.2s ease;
+}
+.modal-leave-active :deep(.modal) {
   transition: opacity 0.2s ease;
+}
+.modal-leave-to :deep(.modal) {
+  opacity: 0;
 }
 .modal-enter-active :deep(.modal) {
   transition: transform 0.38s var(--ease-spring);
 }
 .modal-enter-from {
-  opacity: 0;
+  background-color: rgba(0, 0, 0, 0);
 }
 .modal-leave-to {
-  opacity: 0;
+  background-color: rgba(0, 0, 0, 0);
 }
 .modal-enter-from :deep(.modal) {
   transform: translateY(16px) scale(0.965);
