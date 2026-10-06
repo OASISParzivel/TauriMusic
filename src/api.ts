@@ -17,6 +17,8 @@ export interface Track {
   /** 缓存后的封面大图绝对路径(512px,详情页/全屏播放页用) */
   coverLarge: string | null;
   hasLyrics: boolean;
+  /** 内容 SHA-256(仅来自音乐包导入的曲目有记录,用于跨包去重) */
+  sha256: string | null;
   lrcPath: string | null;
   addedAt: number;
   mtime: number;
@@ -46,6 +48,14 @@ export interface TrashEntry {
 export interface RestoreReport {
   restored: number;
   failed: number;
+}
+
+/** 音乐包(.tmcl/.tmca)导入结果 */
+export interface PackImportReport {
+  name: string;
+  imported: number;
+  /** 因内容与曲库已有曲目相同而跳过的数量 */
+  skipped: number;
 }
 
 export interface ScanReport {
@@ -131,7 +141,7 @@ export const api = {
   openImportDir: () => invoke<string>("open_import_dir"),
   importPaths: (paths: string[]) => invoke<ImportReport>("import_paths", { paths }),
   importTmc: (path: string) => invoke<string>("import_tmc", { path }),
-  importTmca: (path: string) => invoke<string>("import_tmca", { path }),
+  importTmca: (path: string) => invoke<PackImportReport>("import_tmca", { path }),
   pickTmcFile: () => invoke<string | null>("pick_tmc_file"),
   pickAudioFiles: () => invoke<string[] | null>("pick_audio_files"),
   pickExportDir: () => invoke<string | null>("pick_export_dir"),
@@ -163,6 +173,6 @@ export const api = {
     invoke<Playlist[]>("remove_playlist_entry", { playlistId, index }),
   movePlaylistEntry: (playlistId: string, from: number, to: number) =>
     invoke<Playlist[]>("move_playlist_entry", { playlistId, from, to }),
-  importPlaylistTmcl: (path: string) => invoke<string>("import_playlist_tmcl", { path }),
+  importPlaylistTmcl: (path: string) => invoke<PackImportReport>("import_playlist_tmcl", { path }),
   getResourceUsage: () => invoke<ResourceUsage>("get_resource_usage"),
 };

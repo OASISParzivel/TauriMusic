@@ -172,9 +172,12 @@ export async function importDropped(paths: string[]): Promise<void> {
     let ok = 0;
     let fail = 0;
     const names: string[] = [];
+    let skippedTotal = 0;
     for (const p of tmca) {
       try {
-        names.push(await api.importTmca(p));
+        const r = await api.importTmca(p);
+        names.push(r.name);
+        skippedTotal += r.skipped;
         ok++;
       } catch (err) {
         console.error("导入 TMCA 失败", err);
@@ -182,15 +185,21 @@ export async function importDropped(paths: string[]): Promise<void> {
         parts.push(`专辑导入失败: ${String(err)}`);
       }
     }
-    if (ok) parts.push(`导入专辑「${names.join("」「")}」${fail ? ` · ${fail} 个失败` : ""}`);
+    if (ok) {
+      const skipNote = skippedTotal ? ` · 跳过 ${skippedTotal} 首重复` : "";
+      parts.push(`导入专辑「${names.join("」「")}」${skipNote}${fail ? ` · ${fail} 个失败` : ""}`);
+    }
   }
   if (tmcl.length) {
     let ok = 0;
     let fail = 0;
     const names: string[] = [];
+    let skippedTotal = 0;
     for (const p of tmcl) {
       try {
-        names.push(await api.importPlaylistTmcl(p));
+        const r = await api.importPlaylistTmcl(p);
+        names.push(r.name);
+        skippedTotal += r.skipped;
         ok++;
       } catch (err) {
         console.error("导入 TMCL 失败", err);
@@ -198,7 +207,12 @@ export async function importDropped(paths: string[]): Promise<void> {
         parts.push(`播放列表导入失败: ${String(err)}`);
       }
     }
-    if (ok) parts.push(`导入播放列表「${names.join("」「")}」${fail ? ` · ${fail} 个失败` : ""}`);
+    if (ok) {
+      const skipNote = skippedTotal ? ` · 跳过 ${skippedTotal} 首重复` : "";
+      parts.push(
+        `导入播放列表「${names.join("」「")}」${skipNote}${fail ? ` · ${fail} 个失败` : ""}`,
+      );
+    }
   }
   if (tmc.length) {
     let ok = 0;

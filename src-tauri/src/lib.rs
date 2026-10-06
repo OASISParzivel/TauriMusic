@@ -3,6 +3,7 @@ mod model;
 mod scanner;
 
 use model::Library;
+use sha2::Digest as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -359,6 +360,34 @@ fn import_tmc_file(src: &Path, app: &tauri::AppHandle) -> Result<String, String>
     }
     fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
     sevenz_rust2::decompress_file(src, &dest).map_err(|e| format!("解包失败: {e}"))?;
+
+    // 新包带音频 SHA-256:解包结果与记录不符说明文件损坏,拒绝入库并清理
+    let meta_path = dest.join("meta.json");
+    if meta_path.is_file() {
+        if let Ok(v) =
+            serde_json::from_slice::<serde_json::Value>(&fs::read(&meta_path).unwrap_or_default())
+        {
+            if let Some(expect) = v.get("sha256").and_then(|x| x.as_str()) {
+                let audio = fs::read_dir(&dest).ok().and_then(|rd| {
+                    rd.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
+                        p.extension()
+                            .and_then(|x| x.to_str())
+                            .map(|x| scanner::EXTENSIONS.contains(&x.to_lowercase().as_str()))
+                            .unwrap_or(false)
+                    })
+                });
+                if let Some(audio) = audio {
+                    let ok = sha256_hex(&audio)
+                        .map(|h| h.eq_ignore_ascii_case(expect))
+                        .unwrap_or(false);
+                    if !ok {
+                        let _ = fs::remove_dir_all(&dest);
+                        return Err("音乐包校验失败:文件已损坏".into());
+                    }
+                }
+            }
+        }
+    }
     Ok(dest.to_string_lossy().to_string())
 }
 
@@ -675,10 +704,14 @@ fn plan_track_assets(tracks: &[model::Track], workspace: &Path) -> Result<Planne
         let folder = format!("music/{:02}. {stem}", i + 1);
         let audio_name = format!("{stem}.{ext}");
 
+        let Some(audio_sha) = sha256_hex(audio) else {
+            continue;
+        };
         assets.push((format!("{folder}/{audio_name}"), audio.to_path_buf()));
         let mut item = serde_json::json!({
             "dir": folder,
             "audio": audio_name,
+            "sha256": audio_sha,
             "title": t.title,
             "artist": t.artist,
             "album": t.album,
@@ -691,6 +724,9 @@ fn plan_track_assets(tracks: &[model::Track], workspace: &Path) -> Result<Planne
                 let lrc_name = format!("{stem}.lrc");
                 assets.push((format!("{folder}/{lrc_name}"), lp.to_path_buf()));
                 item["lrc"] = serde_json::json!(lrc_name);
+                if let Some(h) = sha256_hex(lp) {
+                    item["lrcSha256"] = serde_json::json!(h);
+                }
             }
         }
         if let Some(cover) = &t.cover {
@@ -703,6 +739,9 @@ fn plan_track_assets(tracks: &[model::Track], workspace: &Path) -> Result<Planne
                 let cover_name = format!("{stem}.cover.{cext}");
                 assets.push((format!("{folder}/{cover_name}"), cp.to_path_buf()));
                 item["cover"] = serde_json::json!(cover_name);
+                if let Some(h) = sha256_hex(cp) {
+                    item["coverSha256"] = serde_json::json!(h);
+                }
             }
         }
         // meta.json 供扫描器补齐无内嵌标签的文件;写在临时目录再随包
@@ -792,16 +831,22 @@ fn stage_tmca_blocking(
 
     // 专辑封面是专辑级属性,包内只保留一份:去重后放包根 cover.{ext},
     // 导入时再分发到各曲目目录(存在多种不同封面的特殊专辑退回逐曲目携带)
-    let (root_cover, items) = match dedupe_album_cover_assets(&mut assets) {
-        Some(name) => {
+    let root_cover = dedupe_album_cover_assets(&mut assets);
+    let root_cover_sha = root_cover
+        .as_ref()
+        .and_then(|name| assets.iter().find(|(n, _)| n == name))
+        .and_then(|(_, path)| sha256_hex(path));
+    let items = match &root_cover {
+        Some(_) => {
             for item in &mut items {
                 if let Some(obj) = item.as_object_mut() {
                     obj.remove("cover");
+                    obj.remove("coverSha256");
                 }
             }
-            (Some(name.clone()), items)
+            items
         }
-        None => (None, items),
+        None => items,
     };
 
     let manifest = serde_json::json!({
@@ -812,6 +857,7 @@ fn stage_tmca_blocking(
         "year": tracks[0].year,
         "genre": tracks[0].genre,
         "cover": root_cover,
+        "coverSha256": root_cover_sha,
         "createdAt": now_secs(),
         "tracks": items,
     });
@@ -927,15 +973,15 @@ fn write_manifest_meta_files(dest: &Path, tracks_json: &[serde_json::Value]) {
     }
 }
 
-/// 导入 .tmca 专辑包:解包到导入目录 → 扫描入库;专辑归类由元数据成立,不建歌单
+/// 导入 .tmca 专辑包:解包到导入目录 → 校验/去重 → 扫描入库;专辑归类由元数据成立
 #[tauri::command]
-async fn import_tmca(path: String, app: tauri::AppHandle) -> Result<String, String> {
+async fn import_tmca(path: String, app: tauri::AppHandle) -> Result<PackImportReport, String> {
     tauri::async_runtime::spawn_blocking(move || import_tmca_blocking(&path, &app))
         .await
         .map_err(|e| e.to_string())?
 }
 
-fn import_tmca_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, String> {
+fn import_tmca_blocking(path: &str, app: &tauri::AppHandle) -> Result<PackImportReport, String> {
     let src = Path::new(path);
     if !src.is_file() {
         return Err("文件不存在".into());
@@ -976,6 +1022,9 @@ fn import_tmca_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, St
         .cloned()
         .unwrap_or_default();
 
+    // 逐文件 SHA-256 校验 + 与曲库内容去重
+    let (tracks_json, skipped) = verify_and_dedupe_pack(&dest, tracks_json, &state)?;
+
     // 为无内嵌标签的文件补 meta.json(扫描器据此补齐元数据)
     write_manifest_meta_files(&dest, &tracks_json);
 
@@ -984,8 +1033,19 @@ fn import_tmca_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, St
 
     // 扫描入库(与拖拽导入同一路径);专辑归类由 meta.json/内嵌标签成立
     scanner::run_scan(app)?;
+
+    // 来源包记录的 SHA 写进曲库,供后续包导入做内容去重
+    record_pack_shas(&state, &dest, &tracks_json)?;
+
     let _ = app.emit("library-changed", ());
-    Ok(album_name)
+    if tracks_json.is_empty() && skipped > 0 {
+        return Err("专辑内全部曲目都已存在,已跳过导入".into());
+    }
+    Ok(PackImportReport {
+        name: album_name,
+        imported: tracks_json.len() as u32,
+        skipped,
+    })
 }
 
 // ===== 在线元数据补全(网易云公开接口,仅补封面/歌词,不涉及流媒体) =====
@@ -2188,6 +2248,28 @@ fn purge_expired_trash(app: &tauri::AppHandle) {
 
 // ===== 播放列表(用户歌单:创建/改名/增删曲目/排序/导出导入) =====
 
+/// io::Write 包装:把写入的字节流喂给 SHA-256
+struct Sha256Writer(sha2::Sha256);
+impl std::io::Write for Sha256Writer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// 流式计算文件 SHA-256(十六进制小写);音频可达数百 MB,io::copy 分块搬运不驻留大内存
+fn sha256_hex(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut w = Sha256Writer(sha2::Sha256::new());
+    std::io::copy(&mut file, &mut w).ok()?;
+    // 逐字节十六进制编码(sha2 0.11 的摘要类型不再实现 LowerHex)
+    let hex: String = w.0.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    Some(hex)
+}
+
 fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2467,9 +2549,20 @@ fn stage_tmcl_blocking(
     Ok(staged.to_string_lossy().to_string())
 }
 
-/// 导入 .tmcl:解包到导入目录 → 补 meta.json → 扫描 → 建立播放列表,返回列表名
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackImportReport {
+    pub name: String,
+    pub imported: u32,
+    pub skipped: u32,
+}
+
+/// 导入 .tmcl:解包到导入目录 → 校验/去重 → 补 meta.json → 扫描 → 建立播放列表
 #[tauri::command]
-async fn import_playlist_tmcl(path: String, app: tauri::AppHandle) -> Result<String, String> {
+async fn import_playlist_tmcl(
+    path: String,
+    app: tauri::AppHandle,
+) -> Result<PackImportReport, String> {
     tauri::async_runtime::spawn_blocking(move || import_playlist_tmcl_blocking(&path, &app))
         .await
         .map_err(|e| e.to_string())?
@@ -2479,6 +2572,125 @@ async fn import_playlist_tmcl(path: String, app: tauri::AppHandle) -> Result<Str
 /// (manifest 里的相对路径用 '/',walkdir 产生 '';Windows 也不区分大小写)
 fn norm_path(p: &str) -> String {
     p.replace('/', "\\").to_lowercase()
+}
+
+/// 校验解包后的文件与 manifest 记录的 SHA-256 是否一致,返回损坏文件相对路径清单。
+/// 旧包没有哈希字段则跳过(向后兼容);名字字段先过 safe_manifest_part 防穿越
+fn verify_manifest_hashes(dest: &Path, items: &[serde_json::Value]) -> Vec<String> {
+    let mut bad: Vec<String> = Vec::new();
+    for item in items {
+        for (hash_key, name_key) in [
+            ("sha256", "audio"),
+            ("lrcSha256", "lrc"),
+            ("coverSha256", "cover"),
+        ] {
+            let Some(expect) = item.get(hash_key).and_then(|x| x.as_str()) else {
+                continue;
+            };
+            let Some(name) = item
+                .get(name_key)
+                .and_then(|x| x.as_str())
+                .and_then(safe_manifest_part)
+            else {
+                continue;
+            };
+            let dir = item
+                .get("dir")
+                .and_then(|x| x.as_str())
+                .and_then(safe_manifest_part)
+                .unwrap_or_default();
+            let file = dest.join(&dir).join(&name);
+            let ok = sha256_hex(&file)
+                .map(|h| h.eq_ignore_ascii_case(expect))
+                .unwrap_or(false);
+            if !ok {
+                bad.push(format!("{dir}/{name}"));
+            }
+        }
+    }
+    bad
+}
+
+/// 包导入的哈希三合一:损坏校验(不一致→Err 拒绝入库)、内容去重(与曲库已记录
+/// SHA 相同→删除解包产物并跳过)、返回保留条目与跳过数。旧包无哈希字段原样通过
+fn verify_and_dedupe_pack(
+    dest: &Path,
+    items: Vec<serde_json::Value>,
+    state: &AppState,
+) -> Result<(Vec<serde_json::Value>, u32), String> {
+    let bad = verify_manifest_hashes(dest, &items);
+    if !bad.is_empty() {
+        return Err(format!("包校验失败,文件已损坏: {}", bad.join("; ")));
+    }
+    let known: std::collections::HashSet<String> = {
+        let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        lib.tracks
+            .iter()
+            .filter_map(|t| t.sha256.as_deref().map(|s| s.to_ascii_lowercase()))
+            .collect()
+    };
+    let mut kept: Vec<serde_json::Value> = Vec::with_capacity(items.len());
+    let mut skipped = 0u32;
+    for item in items {
+        let sha = item
+            .get("sha256")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_ascii_lowercase());
+        let dir = item
+            .get("dir")
+            .and_then(|x| x.as_str())
+            .and_then(safe_manifest_part);
+        let _audio = item
+            .get("audio")
+            .and_then(|x| x.as_str())
+            .and_then(safe_manifest_part);
+        if let (Some(sha), Some(dir)) = (&sha, &dir) {
+            if known.contains(sha) {
+                // 内容与曲库已有曲目相同:每首歌一个独立目录,可安全整目录移除
+                let _ = fs::remove_dir_all(dest.join(dir));
+                skipped += 1;
+                continue;
+            }
+        }
+        kept.push(item);
+    }
+    Ok((kept, skipped))
+}
+
+/// 把来源包记录的 SHA-256 补写进曲库记录(按路径匹配;路径可能因去重改名,做规范化比对)。
+/// 之后扫描遇到未变化的文件会原样保留该哈希,跨包去重持续有效
+fn record_pack_shas(
+    state: &AppState,
+    dest: &Path,
+    items: &[serde_json::Value],
+) -> Result<(), String> {
+    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+    for item in items {
+        let (sha, dir, audio) = (
+            item.get("sha256").and_then(|x| x.as_str()),
+            item.get("dir")
+                .and_then(|x| x.as_str())
+                .and_then(safe_manifest_part),
+            item.get("audio")
+                .and_then(|x| x.as_str())
+                .and_then(safe_manifest_part),
+        );
+        let (Some(sha), Some(dir), Some(audio)) = (sha, dir, audio) else {
+            continue;
+        };
+        let abs = dest.join(dir).join(audio);
+        let abs_str = abs.to_string_lossy().replace('/', "\\");
+        let abs_norm = norm_path(&abs_str);
+        if let Some(t) = lib
+            .tracks
+            .iter_mut()
+            .find(|t| t.path == abs_str || norm_path(&t.path) == abs_norm)
+        {
+            t.sha256 = Some(sha.to_ascii_lowercase());
+        }
+    }
+    lib.save(&state.data_dir.join(LIBRARY_FILE))
+        .map_err(|e| e.to_string())
 }
 
 /// 校验 TMCL manifest 里的相对目录/文件名:拒绝绝对路径、盘符前缀与 `..` 组件。
@@ -2505,7 +2717,10 @@ fn safe_manifest_part(part: &str) -> Option<String> {
     (!out.is_empty()).then(|| out.join("/"))
 }
 
-fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<String, String> {
+fn import_playlist_tmcl_blocking(
+    path: &str,
+    app: &tauri::AppHandle,
+) -> Result<PackImportReport, String> {
     let src = Path::new(path);
     if !src.is_file() {
         return Err("文件不存在".into());
@@ -2543,11 +2758,17 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
         .cloned()
         .unwrap_or_default();
 
+    // 逐文件 SHA-256 校验 + 与曲库内容去重
+    let (tracks_json, skipped) = verify_and_dedupe_pack(&dest, tracks_json, &state)?;
+
     // 为无内嵌标签的文件写 meta.json(扫描器据此补齐元数据)
     write_manifest_meta_files(&dest, &tracks_json);
 
     // 扫描入库(与拖拽导入同一路径)
     scanner::run_scan(app)?;
+
+    // 来源包记录的 SHA 写进曲库,供后续包导入做内容去重
+    record_pack_shas(&state, &dest, &tracks_json)?;
 
     // 建立播放列表:优先用扫描后的曲库数据,否则退回 manifest 快照
     let mut entries: Vec<model::PlaylistEntry> = Vec::new();
@@ -2610,9 +2831,13 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
         });
     }
     if entries.is_empty() {
+        if skipped > 0 {
+            return Err("歌单内全部曲目都已存在,已跳过导入".into());
+        }
         return Err("TMCL 中没有可导入的曲目".into());
     }
 
+    let imported = entries.len() as u32;
     let final_name = {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
         let name = unique_playlist_name(&lib.playlists, &list_name);
@@ -2627,9 +2852,12 @@ fn import_playlist_tmcl_blocking(path: &str, app: &tauri::AppHandle) -> Result<S
         name
     };
     let _ = app.emit("library-changed", ());
-    Ok(final_name)
+    Ok(PackImportReport {
+        name: final_name,
+        imported,
+        skipped,
+    })
 }
-
 pub const ASSOC_EXTS: &[(&str, &str)] = &[
     ("tmc", "TMC 音乐包"),
     ("tmcl", "TMCL 播放列表"),
@@ -2990,6 +3218,7 @@ mod tests {
         artist_matches, copy_into_import_dir, is_under, name_matches, place_archive,
         same_file_content, sanitize_name, CopyResult,
     };
+    use crate::model;
     use std::fs;
 
     #[test]
@@ -3311,5 +3540,65 @@ mod tests {
         // 控制字符剔除,空结果回退默认名
         assert_eq!(sanitize_name("\u{0}\u{1}"), "track");
         assert_eq!(sanitize_name(""), "track");
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_vectors() {
+        use super::sha256_hex;
+        let dir = std::env::temp_dir().join(format!("tm-sha-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // 标准测试向量:空文件与 "abc"
+        let empty = dir.join("empty.bin");
+        fs::write(&empty, b"").unwrap();
+        assert_eq!(
+            sha256_hex(&empty).as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+        let abc = dir.join("abc.bin");
+        fs::write(&abc, b"abc").unwrap();
+        assert_eq!(
+            sha256_hex(&abc).as_deref(),
+            Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn verify_manifest_hashes_detects_tampering() {
+        use super::{sha256_hex, verify_manifest_hashes};
+        let dir = std::env::temp_dir().join(format!("tm-verify-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("music/01")).unwrap();
+        let audio = dir.join("music/01").join("a.mp3");
+        fs::write(&audio, b"hello").unwrap();
+        let sha = sha256_hex(&audio).unwrap();
+        let item = serde_json::json!({ "dir": "music/01", "audio": "a.mp3", "sha256": sha });
+        assert!(verify_manifest_hashes(&dir, std::slice::from_ref(&item)).is_empty());
+        // 篡改后必须被发现并报出相对路径
+        fs::write(&audio, b"hellO").unwrap();
+        assert_eq!(
+            verify_manifest_hashes(&dir, &[item]),
+            vec!["music/01/a.mp3"]
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plan_track_assets_records_sha256() {
+        use super::{plan_track_assets, sha256_hex};
+        let dir = std::env::temp_dir().join(format!("tm-plan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("a.wav");
+        fs::write(&audio, b"riff-wave-bytes").unwrap();
+        let track = model::Track {
+            path: audio.to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        let (_, items) = plan_track_assets(&[track], &dir).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["sha256"].as_str(), sha256_hex(&audio).as_deref());
+        fs::remove_dir_all(&dir).ok();
     }
 }

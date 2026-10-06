@@ -403,6 +403,7 @@ fn parse_track(
         path: path_str,
         cover,
         cover_large,
+        sha256: None,
         has_lyrics,
         lrc_path,
         added_at,

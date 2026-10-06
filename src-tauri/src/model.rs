@@ -23,6 +23,9 @@ pub struct Track {
     pub cover: Option<String>,
     /// 缓存后的封面大图绝对路径(512px,详情页/全屏播放页用)
     pub cover_large: Option<String>,
+    /// 内容 SHA-256(仅来自音乐包导入的曲目有记录,用于跨包去重);文件变化后失效
+    #[serde(default)]
+    pub sha256: Option<String>,
     /// 是否存在可用歌词(内嵌或同名 .lrc)
     pub has_lyrics: bool,
     /// 同名 .lrc 伴生文件路径
