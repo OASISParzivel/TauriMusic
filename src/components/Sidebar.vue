@@ -89,6 +89,18 @@ const statusText = computed(() =>
         </svg>
         <span>{{ item.label }}</span>
       </button>
+      <button
+        class="nav-item pl-item pl-all"
+        :class="{ active: ui.view === 'playlists' }"
+        @click="go('playlists')"
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <path d="M4 6.5h11M4 12h11M4 17.5h7" />
+          <circle cx="18.5" cy="15.5" r="2.2" />
+          <path d="M20.7 15.5V9l-3.4.9" />
+        </svg>
+        <span class="pl-text muted">全部播放列表</span>
+      </button>
     </nav>
 
     <div class="section-label pl-head">
@@ -115,18 +127,6 @@ const statusText = computed(() =>
           <path d="M20.7 15.5V9l-3.4.9" />
         </svg>
         <span class="pl-text">{{ p.name }}</span>
-      </button>
-      <button
-        class="nav-item pl-item pl-all"
-        :class="{ active: ui.view === 'playlists' }"
-        @click="go('playlists')"
-      >
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-          <path d="M4 6.5h11M4 12h11M4 17.5h7" />
-          <circle cx="18.5" cy="15.5" r="2.2" />
-          <path d="M20.7 15.5V9l-3.4.9" />
-        </svg>
-        <span class="pl-text muted">全部播放列表</span>
       </button>
     </div>
 
