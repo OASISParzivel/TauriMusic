@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TauriMusic — 免费开源的 Windows 本地音乐播放器</title>
+  <meta name="description"
+    content="TauriMusic：免费开源的 Windows 本地音乐播放器。自动整理曲库、在线匹配歌词与封面、把歌打包分享给朋友，删错的歌 30 天内可找回。不要账号，数据只在自己电脑上。">
+  <link rel="icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c8cff'/%3E%3Cstop offset='1' stop-color='%2345d4e8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='4' width='56' height='56' rx='16' fill='url(%23g)'/%3E%3Cpath d='M26 42V24.5l16-3.5V38' stroke='white' stroke-width='3.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cellipse cx='22.5' cy='42' rx='5' ry='4.2' fill='white'/%3E%3Cellipse cx='38.5' cy='38' rx='5' ry='4.2' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+  <!-- 背景层:柔和渐变 + 漂移光斑(纯 CSS,无图片) -->
+  <div class="bg" aria-hidden="true">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+    <div class="blob b4"></div>
+    <div class="grain"></div>
+  </div>
+
+  <!-- ============ 导航 ============ -->
+  <header class="nav glass">
+    <a class="brand" href="#top">
+      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <linearGradient id="lg0" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#7c8cff" />
+            <stop offset="1" stop-color="#45d4e8" />
+          </linearGradient>
+        </defs>
+        <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#lg0)" />
+        <path d="M26 42V24.5l16-3.5V38" stroke="#fff" stroke-width="3.6" fill="none" stroke-linecap="round"
+          stroke-linejoin="round" />
+        <ellipse cx="22.5" cy="42" rx="5" ry="4.2" fill="#fff" />
+        <ellipse cx="38.5" cy="38" rx="5" ry="4.2" fill="#fff" />
+      </svg>
+      <span>TauriMusic</span>
+      <span class="ver">v0.4.3</span>
+    </a>
+    <nav class="links">
+      <a href="#features">功能</a>
+      <a href="#demo">界面演示</a>
+      <a href="#packs">音乐包分享</a>
+      <a href="#download">下载</a>
+    </nav>
+    <div class="nav-right">
+      <a class="gh-btn" href="https://github.com/OArt3misQAQ/TauriMusic" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path
+            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+            fill="currentColor" />
+        </svg>
+        GitHub
+      </a>
+      <button id="themeBtn" class="icon-btn" type="button" aria-label="切换深浅色">
+        <svg class="ic-moon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M15.6 12.7A6.4 6.4 0 0 1 7.3 4.4 6.4 6.4 0 1 0 15.6 12.7Z" fill="none" stroke="currentColor"
+            stroke-width="1.5" stroke-linejoin="round" />
+        </svg>
+        <svg class="ic-sun" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="3.4" fill="none" stroke="currentColor" stroke-width="1.5" />
+          <path
+            d="M10 1.8v2M10 16.2v2M1.8 10h2M16.2 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M15.8 4.2l-1.4 1.4M5.6 14.4l-1.4 1.4"
+            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="top">
+
+    <!-- ============ Hero ============ -->
+    <section class="hero">
+      <div class="hero-text reveal">
+        <p class="eyebrow">免费开源 · Apache-2.0 许可证 · 仅支持 Windows</p>
+        <h1>把本地曲库<br>管到位。</h1>
+        <p class="lede">
+          TauriMusic 是一款免费开源的 Windows 本地音乐播放器：把音乐文件夹交给它，歌名、封面、歌词自动配好。
+          不要账号、不上传任何数据，曲库只留在你自己的电脑里。
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/OArt3misQAQ/TauriMusic/releases/latest" target="_blank"
+            rel="noopener">去 GitHub 下载</a>
+          <a class="btn ghost" href="#features">看看有什么功能</a>
+        </div>
+        <dl class="stats">
+          <div>
+            <dt><span data-count="6">0</span> 种</dt>
+            <dd>常见音频格式,直接拖进来就能放</dd>
+          </div>
+          <div>
+            <dt><span data-count="3">0</span> 种</dt>
+            <dd>音乐包格式,把歌打包分享给朋友</dd>
+          </div>
+          <div>
+            <dt><span data-count="30">0</span> 天</dt>
+            <dd>删错的歌进回收站,随时找回</dd>
+          </div>
+          <div>
+            <dt>0</dt>
+            <dd>账号、云端、广告,一个都没有</dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- 界面演示:主窗口(纯 CSS/SVG 绘制) -->
+      <div class="hero-mock reveal">
+        <div class="win glass-heavy" aria-label="TauriMusic 主窗口示意">
+          <div class="win-bar">
+            <span class="win-title">
+              <svg class="logo sm" viewBox="0 0 64 64" aria-hidden="true">
+                <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#lg0)" />
+                <path d="M26 42V24.5l16-3.5V38" stroke="#fff" stroke-width="3.6" fill="none" stroke-linecap="round"
+                  stroke-linejoin="round" />
+                <ellipse cx="22.5" cy="42" rx="5" ry="4.2" fill="#fff" />
+                <ellipse cx="38.5" cy="38" rx="5" ry="4.2" fill="#fff" />
+              </svg>
+              TauriMusic
+            </span>
+            <span class="win-ctrl" aria-hidden="true">
+              <i class="wc min"></i><i class="wc max"></i><i class="wc close"></i>
+            </span>
+          </div>
+          <div class="win-body">
+            <aside class="win-side">
+              <span class="side-item on">最近添加</span>
+              <span class="side-item">专辑</span>
+              <span class="side-item">艺人</span>
+              <span class="side-item">歌曲</span>
+              <span class="side-sep"></span>
+              <span class="side-item">歌单</span>
+              <span class="side-item">回收站</span>
+            </aside>
+            <div class="win-main">
+              <div class="win-search"></div>
+              <div class="grid">
+                <figure class="cov c1">
+                  <figcaption>叶惠美</figcaption>
+                </figure>
+                <figure class="cov c2">
+                  <figcaption>范特西</figcaption>
+                </figure>
+                <figure class="cov c3">
+                  <figcaption>十一月的萧邦</figcaption>
+                </figure>
+                <figure class="cov c4">
+                  <figcaption>七里香</figcaption>
+                </figure>
+                <figure class="cov c5">
+                  <figcaption>依然范特西</figcaption>
+                </figure>
+                <figure class="cov c6">
+                  <figcaption>八度空间</figcaption>
+                </figure>
+              </div>
+              <div class="playbar">
+                <span class="pb-cov c3"></span>
+                <span class="pb-meta"><b>晴天</b><i>周杰伦 · 叶惠美</i></span>
+                <span class="pb-btns">
+                  <svg viewBox="0 0 16 16">
+                    <path d="M11 3v10L4 8l7-5Z" fill="currentColor" />
+                  </svg>
+                  <svg viewBox="0 0 16 16">
+                    <path d="M5 3v10l7-5-7-5Z" fill="currentColor" />
+                  </svg>
+                </span>
+                <span class="pb-track"><i style="width:38%"></i></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 解决什么问题 ============ -->
+    <section class="sec" id="problem">
+      <h2 class="reveal">它解决什么问题</h2>
+      <p class="sec-sub reveal">本地听歌的几个老麻烦：文件散、歌词乱码、播放器臃肿、传歌麻烦。TauriMusic 一个个来解决。</p>
+      <div class="cards four">
+        <article class="card glass reveal">
+          <h3>歌越攒越乱</h3>
+          <p>把音乐文件夹登记进来，它会自动扫出所有歌，读出歌名、歌手、专辑和封面，按专辑、艺人归好类。之后新增的歌再扫一遍，只处理变化的部分，几秒钟就完。</p>
+        </article>
+        <article class="card glass reveal">
+          <h3>老歌歌词全是乱码</h3>
+          <p>很多老歌的歌词文件是十几年前的编码，打开不是问号就是生僻字。TauriMusic 能自动识别并修复这些乱码，内嵌歌词、同名 .lrc 都能正常显示。</p>
+        </article>
+        <article class="card glass reveal">
+          <h3>播放器越装越重</h3>
+          <p>它很轻：安装包不大、启动快，也不会常驻一堆后台进程。实际占了多少内存，在「关于」页里看得明明白白。</p>
+        </article>
+        <article class="card glass reveal">
+          <h3>给朋友传歌太麻烦</h3>
+          <p>选中几首歌、一张专辑或整个歌单，就能打成一个文件发过去。对方装了 TauriMusic，双击就能导入，封面歌词一起带走。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ 核心功能 ============ -->
+    <section class="sec" id="features">
+      <h2 class="reveal">核心功能</h2>
+      <p class="sec-sub reveal">都是日常听歌真用得上的事，每一项装上就能体验到。</p>
+      <div class="cards three">
+        <article class="card glass reveal">
+          <div class="ic"><svg viewBox="0 0 24 24">
+              <path d="M4 5h7l2 2h7v12H4V5Z" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linejoin="round" />
+              <path d="M8 13l2.5 2.5L16 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                stroke-linejoin="round" />
+            </svg></div>
+          <h3>曲库自动整理</h3>
+          <p>歌名、歌手、专辑、年份、封面，自动从文件里读出来；标签缺了就按文件名猜。专辑封面自动备好大图小图，翻列表很流畅。</p>
+        </article>
+        <article class="card glass reveal">
+          <div class="ic"><svg viewBox="0 0 24 24">
+              <path d="M9 17V6.5l9-2.3V15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                stroke-linejoin="round" />
+              <ellipse cx="6.6" cy="17" rx="2.7" ry="2.3" fill="none" stroke="currentColor" stroke-width="1.6" />
+              <ellipse cx="15.6" cy="15" rx="2.7" ry="2.3" fill="none" stroke="currentColor" stroke-width="1.6" />
+            </svg></div>
+          <h3>歌词自动匹配</h3>
+          <p>没内嵌歌词也没关系，会自动去网上匹配。全屏播放页逐行点亮歌词，点哪一句，歌就唱到哪一句。</p>
+        </article>
+        <article class="card glass reveal">
+          <div class="ic"><svg viewBox="0 0 24 24">
+              <path
+                d="M3 7h4l9 10h5m0 0-2.5-2.5M21 17l-2.5 2.5M3 17h4l2.5-3M14.5 9.5 16 8V6h3m0 0-2.5-2.5M19 6l-2.5 2.5"
+                fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg></div>
+          <h3>随机播放不重复</h3>
+          <p>随机模式把整个曲库播完一轮才会重新开始，不重复也不漏歌；「上一曲」永远回到你刚才听的那首，而不是队列里随便一首。</p>
+        </article>
+        <article class="card glass reveal">
+          <div class="ic"><svg viewBox="0 0 24 24">
+              <path d="M4 7h16l-1.2 12.2a2 2 0 0 1-2 1.8H7.2a2 2 0 0 1-2-1.8L4 7Z" fill="none" stroke="currentColor"
+                stroke-width="1.6" stroke-linejoin="round" />
+              <path d="M9 7V5a3 3 0 0 1 6 0v2M9.5 11v6M14.5 11v6" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" />
+            </svg></div>
+          <h3>删错的歌能找回</h3>
+          <p>删除的歌先放进应用内回收站，保留 30 天，随时一键还原到原来的位置；确认不要了，再彻底删掉。</p>
+        </article>
+        <article class="card glass reveal">
+          <div class="ic"><svg viewBox="0 0 24 24">
+              <path d="M12 3v10m0 0 3.5-3.5M12 13 8.5 9.5" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round" />
+            </svg></div>
+          <h3>音乐包分享</h3>
+          <p>单曲、专辑、歌单都能打包成一个文件发出去，导入时自动校验——传输中损坏的包进不了曲库，也不会重复占地方。</p>
+        </article>
+        <article class="card glass reveal">
+          <div class="ic"><svg viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+              <path d="M12 3.5a8.5 8.5 0 0 0 0 17" fill="currentColor" opacity=".35" />
+              <path d="M12 3.5a8.5 8.5 0 0 0 0 17V3.5Z" fill="none" stroke="currentColor" stroke-width="1.6" />
+            </svg></div>
+          <h3>深浅色与氛围背景</h3>
+          <p>外观默认跟随系统，也能手动切换。开启氛围模式后，背景会跟着正在播放的封面变色流动，整个界面像一层会发光的磨砂玻璃。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ 界面演示:全屏播放页(可交互) ============ -->
+    <section class="sec" id="demo">
+      <h2 class="reveal">界面演示：全屏播放页</h2>
+      <p class="sec-sub reveal">按下播放，歌词随节奏逐行点亮；点任意一句，进度直接跳到那一句。</p>
+      <div class="np-wrap reveal">
+        <div class="np glass-heavy">
+          <div class="np-ambient" aria-hidden="true"></div>
+          <div class="np-left">
+            <div class="np-cover" id="npCover">
+              <svg viewBox="0 0 200 200" aria-hidden="true">
+                <defs>
+                  <linearGradient id="ncg" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#f6d365" />
+                    <stop offset=".5" stop-color="#fda085" />
+                    <stop offset="1" stop-color="#a18cd1" />
+                  </linearGradient>
+                </defs>
+                <rect width="200" height="200" fill="url(#ncg)" />
+                <circle cx="150" cy="52" r="34" fill="#fff" opacity=".55" />
+                <path d="M0 150 Q50 108 100 138 T200 122 V200 H0 Z" fill="#3a2b63" opacity=".8" />
+                <path d="M0 168 Q50 132 100 156 T200 142 V200 H0 Z" fill="#241a45" opacity=".9" />
+              </svg>
+            </div>
+            <div class="np-meta">
+              <b>晴天</b>
+              <span>周杰伦 — 叶惠美</span>
+            </div>
+            <div class="np-progress">
+              <span class="np-time" id="npCur">0:00</span>
+              <div class="np-track" id="npTrack"><i id="npFill"></i></div>
+              <span class="np-time">4:29</span>
+            </div>
+            <div class="np-btns">
+              <button type="button" class="np-shuffle" aria-label="随机播放">
+                <svg viewBox="0 0 20 20">
+                  <path d="M2 5h3l8 10h4m0 0-2-2m2 2-2 2M2 15h3l2.4-3M13.5 8 15 6.5V5h2m0 0-2-2m2 2-2 2" fill="none"
+                    stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                    transform="translate(0 .5)" />
+                </svg>
+              </button>
+              <button type="button" aria-label="上一曲"><svg viewBox="0 0 20 20">
+                  <path d="M14 4v12L5 10l9-6Z" fill="currentColor" />
+                  <rect x="3.4" y="4" width="1.8" height="12" rx=".9" fill="currentColor" />
+                </svg></button>
+              <button type="button" class="np-play" id="npPlay" aria-label="播放 / 暂停">
+                <svg class="ic-play" viewBox="0 0 20 20">
+                  <path d="M6.5 4.2v11.6L16 10 6.5 4.2Z" fill="currentColor" />
+                </svg>
+                <svg class="ic-pause" viewBox="0 0 20 20">
+                  <rect x="5" y="4" width="3.4" height="12" rx="1.2" fill="currentColor" />
+                  <rect x="11.6" y="4" width="3.4" height="12" rx="1.2" fill="currentColor" />
+                </svg>
+              </button>
+              <button type="button" aria-label="下一曲"><svg viewBox="0 0 20 20">
+                  <path d="M6 4v12l9-6-9-6Z" fill="currentColor" />
+                  <rect x="14.8" y="4" width="1.8" height="12" rx=".9" fill="currentColor" />
+                </svg></button>
+              <button type="button" aria-label="播放模式"><svg viewBox="0 0 20 20">
+                  <path d="M4 7.5A3.5 3.5 0 0 1 7.5 4h6.2m2.3 0a3.5 3.5 0 0 1 .5 7h-1" fill="none" stroke="currentColor"
+                    stroke-width="1.5" stroke-linecap="round" />
+                  <path d="M13 1.8 15.8 4 13 6.2M7 18.2 4.2 16 7 13.8" fill="none" stroke="currentColor"
+                    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M16 12.5A3.5 3.5 0 0 1 12.5 16H6.3" fill="none" stroke="currentColor" stroke-width="1.5"
+                    stroke-linecap="round" />
+                </svg></button>
+            </div>
+          </div>
+          <div class="np-right">
+            <ul class="np-lyrics" id="npLyrics">
+              <li>故事的小黄花</li>
+              <li>从出生那年就飘着</li>
+              <li>童年的荡秋千</li>
+              <li>随记忆一直晃到现在</li>
+              <li>Re So So Si Do Si La</li>
+              <li>So La Si Si Si Si La Si La So</li>
+              <li>吹着前奏 望着天空</li>
+              <li>我想起花瓣 试着掉落</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 音乐包分享 ============ -->
+    <section class="sec" id="packs">
+      <h2 class="reveal">把歌打包，发给朋友</h2>
+      <p class="sec-sub reveal">选中的歌会打成一个文件，对方用 TauriMusic 双击就能导入。三种包，覆盖三种分享场景。</p>
+      <div class="table-wrap glass reveal">
+        <table>
+          <thead>
+            <tr>
+              <th>包类型</th>
+              <th>里面装什么</th>
+              <th>什么时候用</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>.tmc</code> 单曲包</td>
+              <td>一首歌 + 歌词 + 封面</td>
+              <td>只想分享某一首歌</td>
+            </tr>
+            <tr>
+              <td><code>.tmca</code> 专辑包</td>
+              <td>整张专辑的全部曲目 + 歌词 + 封面</td>
+              <td>安利一整张专辑</td>
+            </tr>
+            <tr>
+              <td><code>.tmcl</code> 歌单包</td>
+              <td>歌单里全部的歌 + 歌单顺序</td>
+              <td>把整个歌单原样搬给朋友</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cards two">
+        <article class="card glass reveal">
+          <h3>传坏了也进不来</h3>
+          <p>导入前会逐个文件校验，任何一个字节对不上就整体拒绝——U 盘拷坏、网盘转存出错，都不会污染曲库。</p>
+        </article>
+        <article class="card glass reveal">
+          <h3>重复导入自动跳过</h3>
+          <p>同一首歌不管传几次、从哪来，都认得出是同一首，曲库里永远只有一份。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ 下载 ============ -->
+    <section class="sec" id="download">
+      <h2 class="reveal">下载与安装</h2>
+      <p class="sec-sub reveal">免费，无需注册。安装包托管在 GitHub Releases，下载即用。</p>
+      <div class="dl glass reveal">
+        <div class="dl-info">
+          <h3>TauriMusic <span class="ver">v0.4.3</span></h3>
+          <ul class="dl-list">
+            <li>双击安装包即可，简体中文界面，Windows 10 / 11 可用</li>
+            <li>也有免安装的绿色版 exe，解压就能用</li>
+            <li>装好后双击音乐包直接导入；关掉窗口会缩到托盘继续放</li>
+            <li>想卸载？删掉程序和数据文件夹即可，不留残余</li>
+          </ul>
+        </div>
+        <div class="dl-actions">
+          <a class="btn primary" href="https://github.com/OArt3misQAQ/TauriMusic/releases/latest" target="_blank"
+            rel="noopener">去 GitHub 下载安装包</a>
+          <a class="btn ghost" href="https://github.com/OArt3misQAQ/TauriMusic" target="_blank"
+            rel="noopener">查看源码仓库</a>
+          <p class="dl-dev">想自己编译或参与开发？仓库 README 里有完整的构建说明。</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="foot glass">
+    <div class="foot-l">
+      <svg class="logo sm" viewBox="0 0 64 64" aria-hidden="true">
+        <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#lg0)" />
+        <path d="M26 42V24.5l16-3.5V38" stroke="#fff" stroke-width="3.6" fill="none" stroke-linecap="round"
+          stroke-linejoin="round" />
+        <ellipse cx="22.5" cy="42" rx="5" ry="4.2" fill="#fff" />
+        <ellipse cx="38.5" cy="38" rx="5" ry="4.2" fill="#fff" />
+      </svg>
+      <span>TauriMusic v0.4.3</span>
+    </div>
+    <div class="foot-r">
+      <p class="foot-oss">本项目是<a href="https://github.com/OArt3misQAQ/TauriMusic" target="_blank"
+          rel="noopener">开源软件</a>（Apache-2.0 许可证），欢迎下载使用、提问题和参与开发。</p>
+      <p>没有账号、没有云端，曲库只在你这台电脑上。</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
