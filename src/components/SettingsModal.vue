@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import Modal from "./Modal.vue";
-import { ui, setThemeMode, toggleGlass } from "../stores/ui";
+import { ui, setThemeMode, setSkin, toggleGlass } from "../stores/ui";
 import { lib, flashStatus, openImportDir, addFolder, rescan, importTmcPick, importMusicPick } from "../stores/library";
 import { api, type AssocState } from "../api";
+
+const skinOptions = [
+  { value: "glass", label: "液态玻璃" },
+  { value: "paper", label: "纸质" },
+] as const;
 
 const themeOptions = [
   { value: "system", label: "跟随系统" },
@@ -77,6 +82,22 @@ async function toggleAssoc(a: AssocState): Promise<void> {
     <div class="sec">皮肤</div>
     <div class="group">
       <button
+        v-for="s in skinOptions"
+        :key="s.value"
+        class="opt"
+        :class="{ on: ui.skin === s.value }"
+        @click="setSkin(s.value)"
+      >
+        <span>{{ s.label }}</span>
+        <svg v-if="ui.skin === s.value" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 12.5 4.5 4.5L19 8" />
+        </svg>
+      </button>
+    </div>
+
+    <div class="sec">外观</div>
+    <div class="group">
+      <button
         v-for="opt in themeOptions"
         :key="opt.value"
         class="opt"
@@ -88,7 +109,7 @@ async function toggleAssoc(a: AssocState): Promise<void> {
           <path d="m5 12.5 4.5 4.5L19 8" />
         </svg>
       </button>
-      <button class="opt" :class="{ on: ui.glass }" @click="toggleGlass">
+      <button v-if="ui.skin === 'glass'" class="opt" :class="{ on: ui.glass }" @click="toggleGlass">
         <span>液态玻璃</span>
         <svg v-if="ui.glass" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="m5 12.5 4.5 4.5L19 8" />
