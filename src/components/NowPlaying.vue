@@ -205,14 +205,33 @@ function onSeek(e: Event): void {
 
 <style scoped>
 .np {
+  /* 播放页局部令牌:纸质皮肤在 style.css 末尾整组覆写(印刷节目单) */
+  --np-bg: #242426;
+  --np-fg: #ffffff;
+  --np-fg-2: rgba(255, 255, 255, 0.62);
+  --np-fg-3: rgba(255, 255, 255, 0.42);
+  --np-fg-soft: rgba(255, 255, 255, 0.75);
+  --np-fg-strong: rgba(255, 255, 255, 0.9);
+  --np-fg-mute: rgba(255, 255, 255, 0.55);
+  --np-plain: rgba(255, 255, 255, 0.8);
+  --np-btn-bg: rgba(255, 255, 255, 0.18);
+  --np-btn-bg-hover: rgba(255, 255, 255, 0.3);
+  --np-close-bg: rgba(255, 255, 255, 0.14);
+  --np-close-hover: rgba(255, 255, 255, 0.26);
+  --np-close-fg: rgba(255, 255, 255, 0.85);
+  --np-track: rgba(255, 255, 255, 0.28);
+  --np-thumb: #ffffff;
+  --np-art-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  --np-art-bg: rgba(255, 255, 255, 0.08);
+  --np-text-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
   position: absolute;
   inset: 0;
   z-index: 60;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  color: #fff;
-  background: #242426;
+  color: var(--np-fg);
+  background: var(--np-bg);
   /* 顶栏悬浮在最上层(z-100):为它预留 48px,标题/封面/歌词不再钻到顶栏底下 */
   padding-top: 48px;
 }
@@ -238,13 +257,13 @@ function onSeek(e: Event): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.85);
-  background: rgba(255, 255, 255, 0.14);
+  color: var(--np-close-fg);
+  background: var(--np-close-bg);
   backdrop-filter: blur(10px);
   transition: background 0.25s var(--ease-out-soft), transform 0.35s var(--ease-spring);
 }
 .close:hover {
-  background: rgba(255, 255, 255, 0.26);
+  background: var(--np-close-hover);
 }
 .close svg {
   width: 18px;
@@ -268,8 +287,8 @@ function onSeek(e: Event): void {
   max-height: 100%;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
-  background: rgba(255, 255, 255, 0.08);
+  box-shadow: var(--np-art-shadow);
+  background: var(--np-art-bg);
 }
 .art img {
   width: 100%;
@@ -284,7 +303,7 @@ function onSeek(e: Event): void {
   align-items: center;
   justify-content: center;
   font-size: 64px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--np-fg-3);
 }
 
 .info {
@@ -292,7 +311,7 @@ function onSeek(e: Event): void {
   top: 26px;
   left: 56px;
   max-width: 420px;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+  text-shadow: var(--np-text-shadow);
 }
 .info .title {
   font-size: 22px;
@@ -331,25 +350,25 @@ function onSeek(e: Event): void {
   font-weight: 700;
   line-height: 1.45;
   padding: 7px 0;
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--np-fg-3);
   cursor: pointer;
   transition: color 0.4s var(--ease-out-soft), transform 0.4s var(--ease-out-soft);
   transform-origin: left center;
 }
 .lyrics.synced p.near {
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--np-fg-2);
 }
 .lyrics.synced p.active {
-  color: #fff;
+  color: var(--np-fg);
   transform: scale(1.02);
 }
 .lyrics.synced p:hover {
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--np-fg-strong);
 }
 .lyrics.plain p {
   font-size: 16px;
   line-height: 1.9;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--np-plain);
   white-space: pre-wrap;
 }
 .lyrics.none {
@@ -357,7 +376,7 @@ function onSeek(e: Event): void {
   align-items: center;
   justify-content: center;
   font-size: 15px;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--np-fg-mute);
 }
 
 .bottom {
@@ -377,18 +396,18 @@ function onSeek(e: Event): void {
 .np-volume .vol-ico {
   width: 16px;
   height: 16px;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--np-fg-soft);
 }
 .np-volume .vol {
   width: 130px;
   background: linear-gradient(
       to right,
-      #fff var(--fill, 0%),
-      rgba(255, 255, 255, 0.25) var(--fill, 0%)
+      var(--np-fg) var(--fill, 0%),
+      var(--np-track) var(--fill, 0%)
   );
 }
 .np-volume .range::-webkit-slider-thumb {
-  background: #fff;
+  background: var(--np-thumb);
 }
 /* 控制行:与进度条同宽同列——三区(模式键/播放控制/音量)都在进度条的宽度内分布,
    不再被 stretch 拉到窗口两角;窄窗口时左右区让位给中间的控制组 */
@@ -416,18 +435,18 @@ function onSeek(e: Event): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--np-fg-soft);
   transition: color 0.15s ease, transform 0.3s var(--ease-spring);
 }
 .t-btn:hover {
-  color: #fff;
+  color: var(--np-fg);
 }
 .t-btn:active {
   transform: scale(0.86);
   transition-duration: 0.08s;
 }
 .t-btn.on {
-  color: #fff;
+  color: var(--np-fg);
 }
 .t-btn svg {
   width: 21px;
@@ -437,11 +456,11 @@ function onSeek(e: Event): void {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--np-btn-bg);
   backdrop-filter: blur(8px);
 }
 .t-btn.play:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--np-btn-bg-hover);
 }
 .t-btn.play svg {
   width: 26px;
@@ -457,7 +476,7 @@ function onSeek(e: Event): void {
 }
 .time {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--np-fg-soft);
   font-variant-numeric: tabular-nums;
   min-width: 36px;
 }
@@ -466,9 +485,57 @@ function onSeek(e: Event): void {
 }
 .seek .range {
   flex: 1;
-  background: linear-gradient(to right, #fff var(--fill, 0%), rgba(255, 255, 255, 0.28) var(--fill, 0%));
+  background: linear-gradient(to right, var(--np-fg) var(--fill, 0%), var(--np-track) var(--fill, 0%));
 }
 .seek .range::-webkit-slider-thumb {
-  background: #fff;
+  background: var(--np-thumb);
+}
+
+/* ===== 纸质皮肤:播放页变"印刷节目单"——纸底、墨字、衬线歌词、封面装裱 ===== */
+html[data-skin="paper"] .np {
+  --np-bg: var(--bg);
+  --np-fg: var(--text);
+  --np-fg-2: var(--text-2);
+  --np-fg-3: var(--text-3);
+  --np-fg-soft: var(--ink);
+  --np-fg-strong: var(--ink);
+  --np-fg-mute: var(--ink-2);
+  --np-plain: var(--text);
+  --np-btn-bg: transparent;
+  --np-btn-bg-hover: var(--hover);
+  --np-close-bg: transparent;
+  --np-close-hover: var(--hover);
+  --np-close-fg: var(--ink);
+  --np-track: rgba(31, 30, 29, 0.18);
+  --np-thumb: var(--ink);
+  --np-art-shadow: var(--paper-shadow);
+  --np-art-bg: var(--bg-3);
+  --np-text-shadow: none;
+  background: var(--bg);
+}
+html[data-skin="paper"] .np::before {
+  display: none; /* 纸上不放模糊封面:节目单是干净的纸面 */
+}
+html[data-skin="paper"] .np .info {
+  text-shadow: none;
+}
+html[data-skin="paper"] .np .info .title {
+  font-family: var(--font-display);
+}
+html[data-skin="paper"] .np .lyrics {
+  font-family: var(--font-display);
+}
+html[data-skin="paper"] .np .lyrics.synced p.active {
+  color: var(--accent);
+}
+html[data-skin="paper"] .np .art {
+  border: 1px solid var(--ink);
+  box-shadow: var(--paper-shadow);
+}
+html[data-skin="paper"] .np .t-btn.play {
+  border: 1px solid var(--ink);
+}
+html[data-skin="paper"] .np .close {
+  border: 1px solid var(--ink);
 }
 </style>
