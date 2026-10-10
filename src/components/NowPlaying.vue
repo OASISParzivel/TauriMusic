@@ -213,6 +213,8 @@ function onSeek(e: Event): void {
   overflow: hidden;
   color: #fff;
   background: #242426;
+  /* 顶栏悬浮在最上层(z-100):为它预留 48px,标题/封面/歌词不再钻到顶栏底下 */
+  padding-top: 48px;
 }
 .np::before {
   content: "";
