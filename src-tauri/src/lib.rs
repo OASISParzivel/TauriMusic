@@ -3180,7 +3180,10 @@ fn set_association(ext: String, enable: bool) -> Result<(), String> {
 
 // ===== 自启动(HKCU Run 键,用户级,无需管理员;与文件关联同一套注册表写法) =====
 
+// 仅 Windows 代码路径引用:不加 cfg 的话 Linux 编译时是死代码,clippy -D warnings 会判死
+#[cfg(windows)]
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(windows)]
 const RUN_VALUE: &str = "TauriMusic";
 
 /// 查询是否已开启开机自启动(HKCU Run 键下有无 TauriMusic 条目)
