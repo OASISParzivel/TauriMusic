@@ -2,10 +2,35 @@
 import { ref } from "vue";
 import Modal from "./Modal.vue";
 import { acceptWelcome } from "../stores/ui";
+import { api } from "../api";
 import { AUTHOR_MAIL } from "../constants";
 
-/** 两步引导:1 使用声明 → 2 感谢信 */
-const step = ref<1 | 2>(1);
+/** 三步引导:1 使用声明 → 2 感谢信 → 3 初始设置(自启动与音乐包关联,默认全部不勾) */
+const step = ref<1 | 2 | 3>(1);
+const wantAutostart = ref(false);
+const wantPackAssoc = ref(false);
+const applying = ref(false);
+
+async function finishWelcome(): Promise<void> {
+  applying.value = true;
+  try {
+    await api.setAutostart(wantAutostart.value);
+    // 安装包默认注册了音乐包关联;用户不勾选时逐项摘除(音频格式的关联保持不变)
+    if (!wantPackAssoc.value) {
+      for (const ext of ["tmc", "tmcl", "tmca"]) {
+        try {
+          await api.setAssociation(ext, false);
+        } catch (err) {
+          console.error(`摘除 .${ext} 关联失败`, err);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("应用初始设置失败", err);
+  }
+  applying.value = false;
+  acceptWelcome();
+}
 </script>
 
 <template>
@@ -50,7 +75,7 @@ const step = ref<1 | 2>(1);
       </div>
 
       <!-- 第二步:感谢信 -->
-      <div v-else key="letter" class="letter-wrap">
+      <div v-else-if="step === 2" key="letter" class="letter-wrap">
         <header class="head letter-head">
           <span class="logo">
             <svg viewBox="0 0 24 24">
@@ -79,13 +104,50 @@ const step = ref<1 | 2>(1);
           </div>
         </div>
 
-        <button class="cta" @click="acceptWelcome">开始使用</button>
+        <button class="cta" @click="step = 3">继续</button>
+      </div>
+      <div v-else key="setup" class="setup-wrap">
+        <header class="head">
+          <span class="logo">
+            <svg viewBox="0 0 24 24">
+              <path d="M9.3 17.6V6.9l9.4-2v10.5" fill="none" stroke="#fff" stroke-width="1.9" stroke-linejoin="round" />
+              <circle cx="7" cy="17.7" r="2.5" fill="#fff" />
+              <circle cx="16.4" cy="15.6" r="2.5" fill="#fff" />
+            </svg>
+          </span>
+          <div>
+            <h2>初始设置</h2>
+            <p class="sub">两项可选项,以后随时能在设置里更改</p>
+          </div>
+        </header>
+
+        <div class="setup">
+          <label class="opt-row">
+            <input v-model="wantAutostart" type="checkbox" />
+            <span class="opt-text">
+              <b>开机自启动</b>
+              <span>登录 Windows 后自动在后台启动 TauriMusic(托盘常驻)</span>
+            </span>
+          </label>
+          <label class="opt-row">
+            <input v-model="wantPackAssoc" type="checkbox" />
+            <span class="opt-text">
+              <b>关联音乐包格式</b>
+              <span>双击 .tmc / .tmcl / .tmca 文件时用 TauriMusic 打开</span>
+            </span>
+          </label>
+        </div>
+
+        <button class="cta" :disabled="applying" @click="finishWelcome">
+          {{ applying ? "正在应用…" : "完成" }}
+        </button>
       </div>
     </Transition>
 
     <div class="dots">
       <span class="dot" :class="{ on: step === 1 }"></span>
       <span class="dot" :class="{ on: step === 2 }"></span>
+      <span class="dot" :class="{ on: step === 3 }"></span>
     </div>
   </Modal>
 </template>
@@ -186,6 +248,47 @@ h2 {
 }
 .mail:hover {
   text-decoration: underline;
+}
+
+/* ===== 初始设置 ===== */
+.setup {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.opt-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 13px 15px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.opt-row:hover {
+  background: var(--hover);
+  border-color: var(--text-3);
+}
+.opt-row input {
+  margin-top: 3px;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  flex: none;
+}
+.opt-text {
+  display: grid;
+  gap: 2px;
+}
+.opt-text b {
+  font-size: 13px;
+  color: var(--text);
+}
+.opt-text span {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.6;
 }
 
 .cta {

@@ -3132,6 +3132,52 @@ fn set_association(ext: String, enable: bool) -> Result<(), String> {
     }
 }
 
+// ===== 自启动(HKCU Run 键,用户级,无需管理员;与文件关联同一套注册表写法) =====
+
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const RUN_VALUE: &str = "TauriMusic";
+
+/// 查询是否已开启开机自启动(HKCU Run 键下有无 TauriMusic 条目)
+#[tauri::command]
+fn get_autostart() -> bool {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+        hkcu.open_subkey(RUN_KEY)
+            .and_then(|k| k.get_value::<String, _>(RUN_VALUE))
+            .is_ok()
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+/// 开启/关闭开机自启动:写或删 HKCU Run 键的 TauriMusic 条目(值为当前 exe 路径)
+#[tauri::command]
+fn set_autostart(enable: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE};
+        let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+        let run = hkcu
+            .open_subkey_with_flags(RUN_KEY, KEY_QUERY_VALUE | KEY_SET_VALUE)
+            .map_err(|e| e.to_string())?;
+        if enable {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            run.set_value(RUN_VALUE, &format!("\"{}\"", exe.display()))
+                .map_err(|e| e.to_string())?;
+        } else {
+            run.delete_value(RUN_VALUE).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enable;
+        Err("仅支持 Windows".into())
+    }
+}
+
 #[tauri::command]
 fn get_library(state: State<AppState>) -> Result<InvokeResponseBody, String> {
     // 锁内直接序列化成 JSON 字符串原样透传(InvokeResponseBody::Json),
@@ -3316,6 +3362,8 @@ pub fn run() {
             netease_enrich_album,
             get_associations,
             set_association,
+            get_autostart,
+            set_autostart,
             delete_tracks,
             restore_tracks,
             purge_trash,

@@ -18,6 +18,7 @@ const ASSOC_HINT =
   "勾选后 TauriMusic 出现在右键\"打开方式\"列表,并注册为当前用户的双击默认程序。若双击仍由其他应用打开,说明系统记住了旧默认:请在\"设置 → 默认应用\"中调整,或在文件右键\"打开方式 → 选择其他应用\"勾选\"始终\"。";
 
 const assocs = ref<AssocState[]>([]);
+const autostart = ref(false);
 
 onMounted(async () => {
   try {
@@ -25,7 +26,23 @@ onMounted(async () => {
   } catch (err) {
     console.error("读取格式关联失败", err);
   }
+  try {
+    autostart.value = await api.getAutostart();
+  } catch (err) {
+    console.error("读取自启动状态失败", err);
+  }
 });
+
+async function toggleAutostart(): Promise<void> {
+  const target = !autostart.value;
+  try {
+    await api.setAutostart(target);
+    autostart.value = target;
+  } catch (err) {
+    console.error("修改自启动失败", err);
+    flashStatus(`自启动修改失败: ${String(err)}`);
+  }
+}
 
 async function toggleAssoc(a: AssocState): Promise<void> {
   try {
@@ -46,6 +63,16 @@ async function toggleAssoc(a: AssocState): Promise<void> {
         <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
       </button>
     </header>
+
+    <div class="sec">通用</div>
+    <div class="group">
+      <button class="opt" :class="{ on: autostart }" @click="toggleAutostart">
+        <span>开机自启动<small class="opt-sub">登录 Windows 后自动启动,托盘常驻</small></span>
+        <svg v-if="autostart" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m5 12.5 4.5 4.5L19 8" />
+        </svg>
+      </button>
+    </div>
 
     <div class="sec">皮肤</div>
     <div class="group">
@@ -179,6 +206,13 @@ async function toggleAssoc(a: AssocState): Promise<void> {
 }
 .opt.on {
   color: var(--text);
+}
+.opt :deep(.opt-sub) {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  margin-top: 1px;
 }
 .opt .check {
   width: 14px;

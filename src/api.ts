@@ -158,6 +158,8 @@ export const api = {
   neteaseEnrichAlbum: (albumKey: string) => invoke<NeteaseReport>("netease_enrich_album", { albumKey }),
   getAssociations: () => invoke<AssocState[]>("get_associations"),
   setAssociation: (ext: string, enable: boolean) => invoke<void>("set_association", { ext, enable }),
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enable: boolean) => invoke<void>("set_autostart", { enable }),
   deleteTracks: (ids: string[]) =>
     invoke<{ deleted: number; failed: number }>("delete_tracks", { ids }),
   /** 还原回收站条目;ids 为空数组表示还原全部 */
