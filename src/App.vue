@@ -20,7 +20,7 @@ import ArtistsView from "./views/ArtistsView.vue";
 import SongsView from "./views/SongsView.vue";
 import SearchView from "./views/SearchView.vue";
 import TrashView from "./views/TrashView.vue";
-import { ui, initTheme, initGlass, initSkin, initWelcome } from "./stores/ui";
+import { ui, initTheme, initSkin, initWelcome } from "./stores/ui";
 import { exportState, initLibrary, initDragImport } from "./stores/library";
 import { initShortcuts } from "./stores/shortcuts";
 import { current } from "./stores/player";
@@ -57,7 +57,7 @@ function onPointerMove(e: PointerEvent): void {
   if (pointerRaf) return;
   pointerRaf = requestAnimationFrame(() => {
     pointerRaf = 0;
-    if (ui.skin !== "glass" || !ui.glass) return;
+    if (ui.skin !== "glass") return;
     const root = document.documentElement;
     root.style.setProperty("--pointer-x", `${e.clientX}px`);
     root.style.setProperty("--pointer-y", `${e.clientY}px`);
@@ -66,7 +66,6 @@ function onPointerMove(e: PointerEvent): void {
 
 onMounted(() => {
   initTheme();
-  initGlass();
   initSkin();
   initWelcome();
   void initLibrary();
@@ -99,7 +98,7 @@ x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="mapY"
       </filter>
     </svg>
 
-    <div v-if="ui.glass && ui.skin === 'glass'" class="ambient">
+    <div v-if="ui.skin === 'glass'" class="ambient">
       <Transition name="amb">
         <div :key="ambientKey" class="ambient-img" :style="{ backgroundImage: ambientImg }"></div>
       </Transition>

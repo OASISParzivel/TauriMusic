@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import Modal from "./Modal.vue";
-import { ui, setThemeMode, setSkin, toggleGlass } from "../stores/ui";
+import { ui, setThemeMode, setSkin } from "../stores/ui";
 import { lib, flashStatus, openImportDir, addFolder, rescan, importTmcPick, importMusicPick } from "../stores/library";
 import { api, type AssocState } from "../api";
 
@@ -106,12 +106,6 @@ async function toggleAssoc(a: AssocState): Promise<void> {
       >
         <span>{{ opt.label }}</span>
         <svg v-if="ui.themeMode === opt.value" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="m5 12.5 4.5 4.5L19 8" />
-        </svg>
-      </button>
-      <button v-if="ui.skin === 'glass'" class="opt" :class="{ on: ui.glass }" @click="toggleGlass">
-        <span>液态玻璃</span>
-        <svg v-if="ui.glass" class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="m5 12.5 4.5 4.5L19 8" />
         </svg>
       </button>

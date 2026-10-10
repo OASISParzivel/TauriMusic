@@ -5,7 +5,6 @@ export const StorageKeys = {
   volume: `${PREFIX}vol`,
   welcome: `${PREFIX}welcome`,
   theme: `${PREFIX}theme`,
-  glass: `${PREFIX}glass`,
   skin: `${PREFIX}skin`,
   mode: `${PREFIX}mode`,
 } as const;
