@@ -1592,7 +1592,11 @@ pub fn generic_client() -> reqwest::blocking::Client {
     CLIENT
         .get_or_init(|| {
             reqwest::blocking::Client::builder()
-                .user_agent("TauriMusic/0.3.0 (https://github.com/OASISParzivel/TauriMusic)")
+                .user_agent(concat!(
+                    "TauriMusic/",
+                    env!("CARGO_PKG_VERSION"),
+                    " (https://github.com/OArt3misQAQ/TauriMusic)"
+                ))
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new())
