@@ -121,54 +121,94 @@ async fn import_paths(paths: Vec<String>, app: tauri::AppHandle) -> Result<Impor
         .map_err(|e| e.to_string())?
 }
 
+/// 散装导入报告:(登记文件夹数, 复制数, 跳过数, 重复数, 本次收集的指纹)
+type LooseImportResult = (u32, u32, u32, u32, Vec<(PathBuf, String)>);
+
+/// 把一批路径导入:文件夹登记进曲库,散装文件复制进导入目录并收集 SHA 指纹。
+/// lib 锁只用于登记与快照,文件复制与哈希在锁外进行(大文件哈希不该卡住其他命令);
+/// 返回报告与本次新收集的指纹。import_paths 命令与 handle_open_paths 共用
+#[allow(clippy::too_many_arguments)]
+fn import_loose(
+    paths: &[PathBuf],
+    import_dir: &Path,
+    state: &AppState,
+) -> Result<LooseImportResult, String> {
+    let mut folders_added = 0u32;
+    let mut files_copied = 0u32;
+    let mut skipped = 0u32;
+    let mut duplicates = 0u32;
+    let mut session_shas: Vec<(PathBuf, String)> = Vec::new();
+
+    // 短锁:登记文件夹 + 快照去重基准(路径/大小 与 SHA 指纹)
+    let (mut known, known_shas) = {
+        let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        let mut dirty = false;
+        for raw in paths {
+            let path = Path::new(raw);
+            if path.is_dir() {
+                let dir_str = path.to_string_lossy().to_string();
+                if !lib.folders.iter().any(|f| f == &dir_str) {
+                    lib.folders.push(dir_str);
+                    folders_added += 1;
+                    dirty = true;
+                }
+            }
+        }
+        if dirty {
+            lib.save(&state.data_dir.join(LIBRARY_FILE))
+                .map_err(|e| e.to_string())?;
+        }
+        let known = lib
+            .tracks
+            .iter()
+            .map(|t| (t.path.clone(), t.size))
+            .collect::<Vec<_>>();
+        let shas = lib
+            .tracks
+            .iter()
+            .filter_map(|t| t.sha256.as_deref().map(|s| s.to_ascii_lowercase()))
+            .collect::<std::collections::HashSet<_>>();
+        (known, shas)
+    };
+
+    // 锁外:复制文件(内容哈希在这里发生)
+    for raw in paths {
+        let path = Path::new(raw);
+        if !path.is_file() {
+            continue;
+        }
+        match copy_into_import_dir(path, import_dir, &known, &known_shas, &mut session_shas) {
+            Ok(CopyResult::Copied) => {
+                files_copied += 1;
+                if let (Ok(m), Some(name)) = (fs::metadata(path), path.file_name()) {
+                    known.push((import_dir.join(name).to_string_lossy().to_string(), m.len()));
+                }
+            }
+            Ok(CopyResult::Duplicate) => duplicates += 1,
+            _ => skipped += 1,
+        }
+    }
+    Ok((
+        folders_added,
+        files_copied,
+        skipped,
+        duplicates,
+        session_shas,
+    ))
+}
+
 fn import_paths_blocking(paths: &[String], app: &tauri::AppHandle) -> Result<ImportReport, String> {
     let state = app.state::<AppState>();
     let import_dir = ensure_import_dir(app, &state)?;
-    let mut report = ImportReport {
-        folders_added: 0,
-        files_copied: 0,
-        skipped: 0,
-        duplicates: 0,
+    let path_bufs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    let (folders_added, files_copied, skipped, duplicates, session_shas) =
+        import_loose(&path_bufs, &import_dir, &state)?;
+    let report = ImportReport {
+        folders_added,
+        files_copied,
+        skipped,
+        duplicates,
     };
-    let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
-    // 内容去重基准:曲库已有文件的 (路径, 大小) 与 SHA 指纹 + 本次会话刚复制的文件
-    let mut known: Vec<(String, u64)> = lib
-        .tracks
-        .iter()
-        .map(|t| (t.path.clone(), t.size))
-        .collect();
-    let known_shas: std::collections::HashSet<String> = lib
-        .tracks
-        .iter()
-        .filter_map(|t| t.sha256.as_deref().map(|s| s.to_ascii_lowercase()))
-        .collect();
-    let mut session_shas: Vec<(PathBuf, String)> = Vec::new();
-    for raw in paths {
-        let path = Path::new(raw);
-        if path.is_dir() {
-            let dir_str = path.to_string_lossy().to_string();
-            if !lib.folders.iter().any(|f| f == &dir_str) {
-                lib.folders.push(dir_str);
-                report.folders_added += 1;
-            }
-        } else if path.is_file() {
-            match copy_into_import_dir(path, &import_dir, &known, &known_shas, &mut session_shas) {
-                Ok(CopyResult::Copied) => {
-                    if let (Ok(m), Some(name)) = (fs::metadata(path), path.file_name()) {
-                        known.push((import_dir.join(name).to_string_lossy().to_string(), m.len()));
-                    }
-                    report.files_copied += 1;
-                }
-                Ok(CopyResult::Duplicate) => report.duplicates += 1,
-                _ => report.skipped += 1,
-            }
-        } else {
-            report.skipped += 1;
-        }
-    }
-    lib.save(&state.data_dir.join(LIBRARY_FILE))
-        .map_err(|e| e.to_string())?;
-    drop(lib);
 
     // 扫描入库并把新导入文件的 SHA 指纹写进曲库——散装导入与音乐包导入
     // 从此共用同一套内容指纹,互相去重
@@ -437,24 +477,9 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
                     return;
                 }
             };
-            let (known, known_shas) = state
-                .lib
-                .lock()
-                .map(|lib| {
-                    (
-                        lib.tracks
-                            .iter()
-                            .map(|t| (t.path.clone(), t.size))
-                            .collect::<Vec<_>>(),
-                        lib.tracks
-                            .iter()
-                            .filter_map(|t| t.sha256.as_deref().map(|s| s.to_ascii_lowercase()))
-                            .collect::<std::collections::HashSet<_>>(),
-                    )
-                })
-                .unwrap_or_default();
-            let mut session_shas: Vec<(PathBuf, String)> = Vec::new();
+            let mut all_session_shas: Vec<(PathBuf, String)> = Vec::new();
             let mut failures: Vec<String> = Vec::new();
+            let mut loose: Vec<PathBuf> = Vec::new();
             for p in &paths {
                 let ext = p
                     .extension()
@@ -464,15 +489,17 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| p.to_string_lossy().to_string());
+                if scanner::EXTENSIONS.contains(&ext.as_str()) || ext == "lrc" {
+                    // 散装音频与歌词:走共享导入通道(文件夹/文件统一处理)
+                    loose.push(p.clone());
+                    continue;
+                }
                 let result = if ext == "tmc" {
                     import_tmc_file(p, &app).map(|_| ())
                 } else if ext == "tmca" {
                     import_tmca_blocking(&p.to_string_lossy(), &app).map(|_| ())
                 } else if ext == "tmcl" {
                     import_playlist_tmcl_blocking(&p.to_string_lossy(), &app).map(|_| ())
-                } else if scanner::EXTENSIONS.contains(&ext.as_str()) {
-                    copy_into_import_dir(p, &import_dir, &known, &known_shas, &mut session_shas)
-                        .map(|_| ())
                 } else {
                     failures.push(format!("{name}: 不支持的格式"));
                     continue;
@@ -481,10 +508,16 @@ fn handle_open_paths(app: &tauri::AppHandle, args: &[String]) {
                     failures.push(format!("{name}: {e}"));
                 }
             }
+            if !loose.is_empty() {
+                match import_loose(&loose, &import_dir, &state) {
+                    Ok((_, _, _, _, shas)) => all_session_shas.extend(shas),
+                    Err(e) => failures.push(format!("导入失败: {e}")),
+                }
+            }
             if let Err(e) = scanner::run_scan(&app) {
                 failures.push(format!("扫描失败: {e}"));
             }
-            if record_track_shas(&state, &session_shas).is_err() {
+            if record_track_shas(&state, &all_session_shas).is_err() {
                 eprintln!("[import] 散装导入指纹写入失败");
             }
             if !failures.is_empty() {
@@ -524,12 +557,14 @@ fn make_stage_dir() -> Result<String, String> {
 #[tauri::command]
 fn cleanup_stage(dir: String) {
     let p = PathBuf::from(&dir);
+    // 纵深防御:除了目录名前缀,还要求父目录确实是系统 Temp
+    let in_temp = p.starts_with(std::env::temp_dir());
     let ours = p
         .file_name()
         .and_then(|n| n.to_str())
         .map(|n| n.starts_with("taurimusic-stage-"))
         .unwrap_or(false);
-    if ours {
+    if ours && in_temp {
         let _ = fs::remove_dir_all(p);
     }
 }
@@ -694,6 +729,11 @@ async fn place_staged(files: Vec<String>, dest_dir: String) -> Result<Vec<String
 /// 把资源表写进暂存区压缩包(进度按条目上报)。
 /// 音频本身已是压缩格式,采用 7z 的 Copy(存储)方法:打包接近纯拷贝速度,
 /// meta/歌词体积可忽略;标准 7z 方法,任何解压工具可读
+/// 字节序列转小写十六进制
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Read 包装:边被读取边计算 SHA-256(导出打包单遍完成"哈希收集+写入")
 struct HashingReader<R: std::io::Read> {
     inner: R,
@@ -743,12 +783,7 @@ fn pack_with_hashes(
         writer
             .push_archive_entry(ArchiveEntry::from_path(path, name.clone()), Some(&mut hr))
             .map_err(|e| e.to_string())?;
-        let digest: String = hr
-            .hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let digest: String = to_hex(hr.hasher.finalize().as_slice());
         hashes.insert(name.clone(), digest);
     }
     let (manifest_name, manifest_path) = build_manifest(&hashes)?;
@@ -1238,20 +1273,20 @@ fn netease_enrich_blocking(
                     // 否则目录里所有专辑都会套上同一张封面
                     let multi_dirs: std::collections::HashSet<PathBuf> = {
                         let lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+                        let mut dir_albums: std::collections::HashMap<
+                            PathBuf,
+                            std::collections::HashSet<String>,
+                        > = std::collections::HashMap::new();
+                        for t in &lib.tracks {
+                            if let Some(p) = Path::new(&t.path).parent() {
+                                dir_albums
+                                    .entry(p.to_path_buf())
+                                    .or_default()
+                                    .insert(format!("{}\u{1}{}", t.album_artist, t.album));
+                            }
+                        }
                         dirs.iter()
-                            .filter(|d| {
-                                let mut seen = std::collections::HashSet::new();
-                                for t in &lib.tracks {
-                                    if Path::new(&t.path)
-                                        .parent()
-                                        .map(|p| p == **d)
-                                        .unwrap_or(false)
-                                    {
-                                        seen.insert(format!("{}\u{1}{}", t.album_artist, t.album));
-                                    }
-                                }
-                                seen.len() > 1
-                            })
+                            .filter(|d| dir_albums.get(*d).map(|s| s.len() > 1).unwrap_or(false))
                             .cloned()
                             .collect()
                     };
@@ -2083,8 +2118,9 @@ fn delete_tracks_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<Dele
     // 1) 锁内:取出匹配曲目并先从曲库移除(避免长时间持锁做文件搬运)
     let to_delete: Vec<model::Track> = {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
+        let id_set: std::collections::HashSet<&String> = ids.iter().collect();
         let (del, kept): (Vec<model::Track>, Vec<model::Track>) =
-            lib.tracks.drain(..).partition(|t| ids.contains(&t.id));
+            lib.tracks.drain(..).partition(|t| id_set.contains(&t.id));
         lib.tracks = kept;
         lib.save(&state.data_dir.join(LIBRARY_FILE))
             .map_err(|e| e.to_string())?;
@@ -2248,17 +2284,18 @@ fn restore_tracks_blocking(
     app: &tauri::AppHandle,
 ) -> Result<RestoreReport, String> {
     let state = app.state::<AppState>();
-    let ids = ids.to_vec();
-    let (all, ids) = {
+    let all = {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
         if ids.is_empty() {
-            let all = std::mem::take(&mut lib.trash);
-            (all, Vec::new())
+            std::mem::take(&mut lib.trash)
         } else {
-            let (sel, rest): (Vec<_>, Vec<_>) =
-                lib.trash.drain(..).partition(|e| ids.contains(&e.track.id));
+            let id_set: std::collections::HashSet<&String> = ids.iter().collect();
+            let (sel, rest): (Vec<_>, Vec<_>) = lib
+                .trash
+                .drain(..)
+                .partition(|e| id_set.contains(&e.track.id));
             lib.trash = rest;
-            (sel, ids)
+            sel
         }
     };
     if all.is_empty() {
@@ -2269,6 +2306,7 @@ fn restore_tracks_blocking(
     }
 
     let (restored, mut failed) = restore_entries(all);
+    let failed_count = failed.len() as u32;
 
     {
         let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
@@ -2279,15 +2317,14 @@ fn restore_tracks_blocking(
         let ok_ids: std::collections::HashSet<&str> =
             restored.iter().map(|(t, _)| t.id.as_str()).collect();
         failed.retain(|e| !ok_ids.contains(e.track.id.as_str()));
-        lib.trash.extend(std::mem::take(&mut failed));
-        let _ = ids;
+        lib.trash.extend(failed);
         lib.save(&state.data_dir.join(LIBRARY_FILE))
             .map_err(|e| e.to_string())?;
     }
     let _ = app.emit("library-changed", ());
     Ok(RestoreReport {
         restored: restored.len() as u32,
-        failed: failed.len() as u32,
+        failed: failed_count,
     })
 }
 
@@ -2306,8 +2343,11 @@ fn purge_trash_blocking(ids: &[String], app: &tauri::AppHandle) -> Result<u32, S
         if ids.is_empty() {
             std::mem::take(&mut lib.trash)
         } else {
-            let (sel, rest): (Vec<_>, Vec<_>) =
-                lib.trash.drain(..).partition(|e| ids.contains(&e.track.id));
+            let id_set: std::collections::HashSet<&String> = ids.iter().collect();
+            let (sel, rest): (Vec<_>, Vec<_>) = lib
+                .trash
+                .drain(..)
+                .partition(|e| id_set.contains(&e.track.id));
             lib.trash = rest;
             sel
         }
@@ -2372,8 +2412,7 @@ fn sha256_hex(path: &Path) -> Option<String> {
     let mut w = Sha256Writer(sha2::Sha256::new());
     std::io::copy(&mut file, &mut w).ok()?;
     // 逐字节十六进制编码(sha2 0.11 的摘要类型不再实现 LowerHex)
-    let hex: String = w.0.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    Some(hex)
+    Some(to_hex(w.0.finalize().as_slice()))
 }
 
 fn now_secs() -> f64 {
@@ -2489,8 +2528,10 @@ fn add_tracks_to_playlist(
 ) -> Result<AddToPlaylistReport, String> {
     let mut lib = state.lib.lock().map_err(|_| "内部状态不可用".to_string())?;
     let mut resolved: Vec<model::PlaylistEntry> = Vec::new();
+    let by_id: std::collections::HashMap<&str, &model::Track> =
+        lib.tracks.iter().map(|t| (t.id.as_str(), t)).collect();
     for id in &track_ids {
-        if let Some(t) = lib.tracks.iter().find(|t| &t.id == id) {
+        if let Some(t) = by_id.get(id.as_str()) {
             resolved.push(entry_of(t));
         }
     }
@@ -2603,15 +2644,20 @@ fn stage_tmcl_blocking(
             .cloned()
             .ok_or("播放列表不存在")?;
         // 条目回查曲库:id 优先,路径兜底;两者都找不到则该曲目已不可用
+        let mut by_id: std::collections::HashMap<&str, &model::Track> = HashMap::new();
+        let mut by_path: std::collections::HashMap<String, &model::Track> = HashMap::new();
+        for t in &lib.tracks {
+            by_id.insert(t.id.as_str(), t);
+            by_path.insert(norm_path(&t.path), t);
+        }
         let tracks: Vec<model::Track> = pl
             .entries
             .iter()
             .filter_map(|e| {
-                lib.tracks
-                    .iter()
-                    .find(|t| t.id == e.id)
-                    .or_else(|| lib.tracks.iter().find(|t| t.path == e.path))
-                    .cloned()
+                let t = by_id
+                    .get(e.id.as_str())
+                    .or_else(|| by_path.get(&norm_path(&e.path)));
+                t.map(|t| (*t).clone())
             })
             .collect();
         (pl, tracks)
@@ -3227,11 +3273,27 @@ async fn pick_music_folder() -> Option<String> {
         .map(|f| f.path().to_string_lossy().to_string())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanWithLibrary {
+    pub report: model::ScanReport,
+    /// 扫描后的完整曲库(JSON 字符串,前端解析)——省掉启动链路上的第二次全量传输
+    pub library: String,
+}
+
 #[tauri::command]
-async fn scan_library(app: tauri::AppHandle) -> Result<model::ScanReport, String> {
-    tauri::async_runtime::spawn_blocking(move || scanner::run_scan(&app))
-        .await
-        .map_err(|e| e.to_string())?
+async fn scan_library(app: tauri::AppHandle) -> Result<ScanWithLibrary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = scanner::run_scan(&app)?;
+        let state = app.state::<AppState>();
+        let library = {
+            let lib = state.lib.lock().map_err(|_| "曲库状态不可用".to_string())?;
+            serde_json::to_string(&*lib).map_err(|e| e.to_string())?
+        };
+        Ok(ScanWithLibrary { report, library })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

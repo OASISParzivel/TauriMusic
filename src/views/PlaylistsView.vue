@@ -68,7 +68,7 @@ const missingOf = (p: Playlist): number =>
                 v-for="(c, i) in collage(p)"
                 :key="i"
                 :src="c"
-                loading="lazy"
+                loading="lazy" decoding="async"
                 :class="{ single: collage(p).length === 1 }"
                 alt=""
               />

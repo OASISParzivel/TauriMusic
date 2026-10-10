@@ -133,7 +133,7 @@ function rowMenu(e: MouseEvent, index: number): void {
       >
         <span class="idx">{{ r.index + 1 }}</span>
         <span class="cov">
-          <img v-if="r.track?.cover" :src="convertFileSrc(r.track.cover)" loading="lazy" alt="" />
+          <img v-if="r.track?.cover" :src="convertFileSrc(r.track.cover)" loading="lazy" decoding="async" alt="" />
           <span v-else class="ph">♪</span>
         </span>
         <span class="main">

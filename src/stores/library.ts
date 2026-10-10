@@ -253,17 +253,23 @@ export async function importTmcPick(): Promise<void> {
   await importDropped([path]);
 }
 
-/** 逐张专辑在线补全,返回有更新的专辑数 */
+/** 逐张专辑在线补全,返回有更新的专辑数;并发度 3(更高会触发接口限流) */
 async function enrichKeys(keys: Set<string>): Promise<number> {
+  const list = [...keys];
   let enriched = 0;
-  for (const key of keys) {
-    try {
-      const r = await api.neteaseEnrichAlbum(key);
-      if (r.cover || r.lyrics > 0) enriched++;
-    } catch (err) {
-      console.error("在线匹配失败", err);
+  let idx = 0;
+  const workers = Array.from({ length: Math.min(3, list.length) }, async () => {
+    while (idx < list.length) {
+      const key = list[idx++];
+      try {
+        const r = await api.neteaseEnrichAlbum(key);
+        if (r.cover || r.lyrics > 0) enriched++;
+      } catch (err) {
+        console.error("在线匹配失败", err);
+      }
     }
-  }
+  });
+  await Promise.all(workers);
   return enriched;
 }
 
@@ -602,9 +608,11 @@ export async function rescan(): Promise<void> {
   lib.scanCurrent = 0;
   lib.scanTotal = 0;
   try {
-    await api.scan();
-    const data = await api.getLibrary();
-    applyLibraryData(data);
+    const r = await api.scan();
+    // 无变化(启动扫描的常态)时跳过全量赋值,避免 computed 重建与视图重渲
+    if (r.report.added || r.report.updated || r.report.removed) {
+      applyLibraryData(JSON.parse(r.library) as { tracks: Track[]; folders: string[]; playlists?: Playlist[]; trash?: TrashEntry[] });
+    }
   } catch (err) {
     console.error("扫描失败", err);
   } finally {
@@ -642,6 +650,9 @@ export async function removeFolder(path: string): Promise<void> {
   lib.tracks = lib.tracks.filter((t) => t.path !== path && !t.path.startsWith(prefix));
 }
 
+// 预建的中文排序器:localeCompare 每次解析 locale 选项,预建后复用快数倍
+export const zhCollator = new Intl.Collator("zh");
+
 const keyOf = (t: Track) => `${t.albumArtist || t.artist}\u{1}${t.album}`;
 
 /** 曲目所属专辑的唯一键(albumArtist + album) */
@@ -674,7 +685,7 @@ export const albums = computed<Album[]>(() => {
       (x, y) =>
         (x.discNo ?? 1) - (y.discNo ?? 1) ||
         (x.trackNo ?? 0) - (y.trackNo ?? 0) ||
-        x.title.localeCompare(y.title, "zh"),
+        zhCollator.compare(x.title, y.title),
     );
   }
   return [...map.values()];
@@ -682,12 +693,12 @@ export const albums = computed<Album[]>(() => {
 
 export const artists = computed<string[]>(() =>
   [...new Set(lib.tracks.map((t) => t.artist || "未知艺人"))].sort((a, b) =>
-    a.localeCompare(b, "zh"),
+    zhCollator.compare(a, b),
   ),
 );
 
 export const allSongs = computed<Track[]>(() =>
-  [...lib.tracks].sort((a, b) => a.title.localeCompare(b.title, "zh")),
+  [...lib.tracks].sort((a, b) => zhCollator.compare(a.title, b.title)),
 );
 
 export function albumByKey(key: string): Album | undefined {

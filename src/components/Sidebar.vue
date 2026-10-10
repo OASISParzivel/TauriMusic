@@ -343,7 +343,7 @@ html.glass .nav-item.active .ico {
   gap: 2px;
   flex: none;
   padding-top: 8px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid var(--hairline);
 }
 :global(html.dark) .actions {
   border-top-color: rgba(255, 255, 255, 0.08);

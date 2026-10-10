@@ -97,7 +97,7 @@ function close(): void {
 }
 .name-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(250, 35, 59, 0.15);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .actions {

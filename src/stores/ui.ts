@@ -14,6 +14,8 @@ export type ViewName =
   | "trash";
 /** 皮肤模式:跟随系统 / 浅色 / 黑色 */
 export type ThemeMode = "system" | "light" | "dark";
+/** 界面材质皮肤:液态玻璃(默认)/ 纸质 */
+export type Skin = "glass" | "paper";
 
 interface UiState {
   view: ViewName;
@@ -29,8 +31,10 @@ interface UiState {
   dark: boolean;
   /** 皮肤模式选择 */
   themeMode: ThemeMode;
-  /** 液态玻璃外观(应用内氛围背景 + 玻璃卡片) */
+  /** 液态玻璃外观(应用内氛围背景 + 玻璃卡片);纸质皮肤下不生效 */
   glass: boolean;
+  /** 界面材质皮肤:液态玻璃 / 纸质 */
+  skin: Skin;
   /** 全屏播放页(含歌词)是否打开 */
   nowPlayingOpen: boolean;
   /** 首次启动使用声明 */
@@ -50,6 +54,7 @@ export const ui = reactive<UiState>({
   dark: false,
   themeMode: "system",
   glass: false,
+  skin: "glass",
   nowPlayingOpen: false,
   welcomeOpen: false,
   settingsOpen: false,
@@ -133,6 +138,20 @@ export function initTheme(): void {
   });
 }
 
+/** 皮肤切换:写入 storage 并同步到根元素 data-skin,驱动 CSS 令牌层 */
+export function setSkin(skin: Skin): void {
+  ui.skin = skin;
+  storageSet(StorageKeys.skin, skin);
+}
+
+export function initSkin(): void {
+  const saved = storageGetString(StorageKeys.skin, "glass");
+  ui.skin = saved === "paper" ? "paper" : "glass";
+  watchEffect(() => {
+    document.documentElement.dataset.skin = ui.skin;
+  });
+}
+
 /** 液态玻璃:封面驱动的氛围背景 + 悬浮玻璃卡片(折射应用自身内容) */
 let glassInited = false;
 
@@ -141,7 +160,8 @@ export function initGlass(): void {
   glassInited = true;
   ui.glass = storageGetString(StorageKeys.glass, "1") !== "0"; // 默认开启
   watchEffect(() => {
-    document.documentElement.classList.toggle("glass", ui.glass);
+    // 纸质皮肤下玻璃材质整体让位:glass 类仅在液态玻璃皮肤时挂载
+    document.documentElement.classList.toggle("glass", ui.glass && ui.skin === "glass");
   });
 }
 

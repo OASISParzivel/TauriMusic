@@ -130,12 +130,18 @@ export interface ResourceUsage {
   cpu: number;
 }
 
+export interface ScanWithLibrary {
+  report: ScanReport;
+  /** 扫描后的完整曲库(JSON 字符串) */
+  library: string;
+}
+
 export const api = {
   getLibrary: () => invoke<Library>("get_library"),
   pickFolder: () => invoke<string | null>("pick_music_folder"),
   addFolder: (path: string) => invoke<void>("add_folder", { path }),
   removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
-  scan: () => invoke<ScanReport>("scan_library"),
+  scan: () => invoke<ScanWithLibrary>("scan_library"),
   getLyrics: (id: string) => invoke<LyricsPayload | null>("get_lyrics", { id }),
   getImportDir: () => invoke<string>("get_import_dir"),
   openImportDir: () => invoke<string>("open_import_dir"),

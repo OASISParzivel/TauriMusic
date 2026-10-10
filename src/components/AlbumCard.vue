@@ -37,7 +37,7 @@ function albumMenu(e: MouseEvent, album: Album): void {
 <template>
   <div class="card" @click="emit('open')" @contextmenu="albumMenu($event, album)">
     <div class="cover">
-      <img v-if="album.cover" :src="convertFileSrc(album.cover)" loading="lazy" alt="" />
+      <img v-if="album.cover" :src="convertFileSrc(album.cover)" loading="lazy" decoding="async" alt="" />
       <div v-else class="ph">♪</div>
       <button class="playbtn" title="播放专辑" @click.stop="playTracks(album.tracks, 0)">
         <svg viewBox="0 0 24 24">
@@ -92,7 +92,7 @@ function albumMenu(e: MouseEvent, album: Album): void {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: rgba(250, 35, 59, 0.94);
+  background: var(--accent);
   color: #fff;
   display: flex;
   align-items: center;

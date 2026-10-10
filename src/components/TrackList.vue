@@ -156,7 +156,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
           <svg class="play-ico" viewBox="0 0 24 24"><path d="M8.6 6.5v11L18 12z" fill="currentColor" /></svg>
         </span>
         <span v-if="showCover" class="cov">
-          <img v-if="t.cover" :src="convertFileSrc(t.cover)" loading="lazy" alt="" />
+          <img v-if="t.cover" :src="convertFileSrc(t.cover)" loading="lazy" decoding="async" alt="" />
           <span v-else class="ph">♪</span>
           <svg class="play-ico" viewBox="0 0 24 24"><path d="M8.6 6.5v11L18 12z" fill="currentColor" /></svg>
         </span>
@@ -202,7 +202,7 @@ function rowMenu(e: MouseEvent, t: Track): void {
         <svg class="play-ico" viewBox="0 0 24 24"><path d="M8.6 6.5v11L18 12z" fill="currentColor" /></svg>
       </span>
       <span v-if="showCover" class="cov">
-        <img v-if="t.cover" :src="convertFileSrc(t.cover)" loading="lazy" alt="" />
+        <img v-if="t.cover" :src="convertFileSrc(t.cover)" loading="lazy" decoding="async" alt="" />
         <span v-else class="ph">♪</span>
         <svg class="play-ico" viewBox="0 0 24 24"><path d="M8.6 6.5v11L18 12z" fill="currentColor" /></svg>
       </span>

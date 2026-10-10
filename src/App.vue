@@ -20,7 +20,7 @@ import ArtistsView from "./views/ArtistsView.vue";
 import SongsView from "./views/SongsView.vue";
 import SearchView from "./views/SearchView.vue";
 import TrashView from "./views/TrashView.vue";
-import { ui, initTheme, initGlass, initWelcome } from "./stores/ui";
+import { ui, initTheme, initGlass, initSkin, initWelcome } from "./stores/ui";
 import { exportState, initLibrary, initDragImport } from "./stores/library";
 import { initShortcuts } from "./stores/shortcuts";
 import { current } from "./stores/player";
@@ -57,7 +57,7 @@ function onPointerMove(e: PointerEvent): void {
   if (pointerRaf) return;
   pointerRaf = requestAnimationFrame(() => {
     pointerRaf = 0;
-    if (!ui.glass) return;
+    if (ui.skin !== "glass" || !ui.glass) return;
     const root = document.documentElement;
     root.style.setProperty("--pointer-x", `${e.clientX}px`);
     root.style.setProperty("--pointer-y", `${e.clientY}px`);
@@ -67,6 +67,7 @@ function onPointerMove(e: PointerEvent): void {
 onMounted(() => {
   initTheme();
   initGlass();
+  initSkin();
   initWelcome();
   void initLibrary();
   void initDragImport();
@@ -87,16 +88,18 @@ onUnmounted(() => {
          旧实现用 feTurbulence 噪声做位移,噪声颗粒感正是"塑料磨砂"的来源 -->
     <svg class="fx-defs" width="0" height="0" aria-hidden="true" focusable="false">
       <filter id="glass-refract" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
-        <feImage x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="mapX"
+        <feImage
+x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="mapX"
           href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='rgb(0,128,128)'/%3E%3Cstop offset='0.14' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='0.86' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='1' stop-color='rgb(255,128,128)'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23g)'/%3E%3C/svg%3E" />
         <feDisplacementMap in="SourceGraphic" in2="mapX" scale="24" xChannelSelector="R" yChannelSelector="G" result="dx" />
-        <feImage x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="mapY"
+        <feImage
+x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="mapY"
           href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='rgb(128,0,128)'/%3E%3Cstop offset='0.14' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='0.86' stop-color='rgb(128,128,128)'/%3E%3Cstop offset='1' stop-color='rgb(128,255,128)'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23g)'/%3E%3C/svg%3E" />
         <feDisplacementMap in="dx" in2="mapY" scale="24" xChannelSelector="R" yChannelSelector="G" />
       </filter>
     </svg>
 
-    <div v-if="ui.glass" class="ambient">
+    <div v-if="ui.glass && ui.skin === 'glass'" class="ambient">
       <Transition name="amb">
         <div :key="ambientKey" class="ambient-img" :style="{ backgroundImage: ambientImg }"></div>
       </Transition>

@@ -549,3 +549,88 @@ html.dark.glass .range {
       var(--accent) var(--fill, 0%),
       rgba(255, 255, 255, 0.22) var(--fill, 0%));
 }
+
+/* ===== 纸质皮肤(html[data-skin="paper"]):奶油纸底 + 墨色文字 + 颗粒 + 衬线标题 =====
+   与液态玻璃互斥:data-skin=paper 时 glass 类不挂载(见 ui.ts),玻璃专属规则整体失效。
+   浅纸为默认,深色模式下是"夜读纸"(深暖底 + 暖墨文字)。 */
+
+html[data-skin="paper"] {
+  --bg: #f0eee6;
+  --bg-2: #faf9f5;
+  --bg-3: #e7e3d7;
+  --text: #1f1e1d;
+  --text-2: #52504c;
+  --text-3: #8a867e;
+  --hairline: #ddd8cc;
+  --hover: rgba(31, 30, 29, 0.05);
+  --active: rgba(193, 95, 60, 0.12);
+  --accent: #c15f3c;
+  --accent-hover: #a34a2c;
+  --pill-bg: rgba(31, 30, 29, 0.06);
+  --card-shadow: 0 1px 3px rgba(31, 30, 29, 0.1);
+  --scrollbar: rgba(31, 30, 29, 0.22);
+  --font-display: Georgia, "Times New Roman", "Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
+}
+
+html[data-skin="paper"].dark {
+  --bg: #211d18;
+  --bg-2: #292420;
+  --bg-3: #322c26;
+  --text: #ede7db;
+  --text-2: rgba(237, 231, 219, 0.62);
+  --text-3: rgba(237, 231, 219, 0.35);
+  --hairline: #3a332b;
+  --hover: rgba(237, 231, 219, 0.06);
+  --active: rgba(217, 123, 82, 0.18);
+  --accent: #d97b52;
+  --accent-hover: #e08a5f;
+  --pill-bg: rgba(237, 231, 219, 0.08);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --scrollbar: rgba(237, 231, 219, 0.2);
+}
+
+/* 纸张颗粒:纸质皮肤专属的全站噪点覆盖 */
+html[data-skin="paper"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 衬线标题:纸面的编辑部排版气质 */
+html[data-skin="paper"] h1,
+html[data-skin="paper"] h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+/* 纸面材质:内容纸面回归实底,与玻璃的透明层叠区分 */
+html[data-skin="paper"] .content {
+  background: var(--bg);
+  border-top-left-radius: 14px;
+  box-shadow: -1px -1px 0 var(--hairline), -8px -4px 20px rgba(0, 0, 0, 0.04);
+}
+
+html[data-skin="paper"] .modal {
+  background: var(--bg-2);
+  border: 1px solid var(--ink);
+  box-shadow: 6px 6px 0 rgba(31, 30, 29, 0.85);
+}
+
+html[data-skin="paper"] .menu {
+  background: var(--bg-2);
+  border: 1px solid var(--ink);
+  box-shadow: 4px 4px 0 rgba(31, 30, 29, 0.85);
+}
+
+/* 玻璃面板残留的指针光斑/光泽在纸面下不渲染(双保险,玻璃类此时已不挂载) */
+html[data-skin="paper"] .sidebar::before,
+html[data-skin="paper"] .sidebar::after,
+html[data-skin="paper"] .topbar::before,
+html[data-skin="paper"] .topbar::after {
+  content: none;
+}
