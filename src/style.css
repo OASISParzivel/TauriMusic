@@ -724,10 +724,3 @@ html[data-skin="paper"] .mode-hint {
   box-shadow: var(--paper-shadow);
 }
 
-/* 播放页:夜读纸下的暖色衔接(冷灰 #242426 与暖纸色温相悖) */
-html[data-skin="paper"] .np {
-  background: #1c1712;
-}
-html[data-skin="paper"] .np .lyrics.synced p {
-  color: rgba(255, 255, 255, 0.55);
-}
