@@ -476,11 +476,10 @@ function rowMenu(e: MouseEvent, t: Track): void {
   background: var(--pill-bg, rgba(0, 0, 0, 0.06));
   border: 1px solid var(--hairline);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
-  backdrop-filter: blur(24px) saturate(1.6);
 }
-/* 边缘透镜折射与其他玻璃面一致 */
+/* 边缘透镜折射:仅玻璃皮肤挂载(纸质/经典铬底下 sel-bar 为纸面材质) */
 @supports (backdrop-filter: url("#glass-refract")) {
-  .sel-bar.glass-fx, html.glass .sel-bar {
+  html.glass .sel-bar {
     backdrop-filter: blur(20px) saturate(1.6) url("#glass-refract");
     -webkit-backdrop-filter: blur(20px) saturate(1.6) url("#glass-refract");
   }

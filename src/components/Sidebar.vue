@@ -345,9 +345,7 @@ html.glass .nav-item.active .ico {
   padding-top: 8px;
   border-top: 1px solid var(--hairline);
 }
-:global(html.dark) .actions {
-  border-top-color: rgba(255, 255, 255, 0.08);
-}
+
 .action {
   display: flex;
   align-items: center;

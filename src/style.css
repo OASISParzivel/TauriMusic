@@ -552,7 +552,8 @@ html.dark.glass .range {
 
 /* ===== 纸质皮肤(html[data-skin="paper"]):奶油纸底 + 墨线 + 颗粒 + 衬线标题 =====
    不只是换色:整个界面按"印刷品"重新上材质——墨线描边、硬阴影、编辑部分隔线。
-   玻璃类在此皮肤下不挂载(见 ui.ts),所以这里直接以非玻璃形态覆盖。 */
+   玻璃类在此皮肤下不挂载(见 ui.ts),所以这里直接以非玻璃形态覆盖。
+   --ink 为装饰墨线色(分明暗两档),--line 对齐 hairline;两者必须先定义后引用。 */
 
 html[data-skin="paper"] {
   --bg: #f0eee6;
@@ -566,10 +567,13 @@ html[data-skin="paper"] {
   --active: rgba(193, 95, 60, 0.12);
   --accent: #c15f3c;
   --accent-hover: #a34a2c;
+  --danger: #b3301c;
+  --danger-bg: rgba(179, 48, 28, 0.1);
   --pill-bg: rgba(31, 30, 29, 0.06);
-  --card-shadow: 4px 4px 0 rgba(31, 30, 29, 0.14);
+  --card-shadow: 0 1px 3px rgba(31, 30, 29, 0.1);
   --scrollbar: rgba(31, 30, 29, 0.22);
-  --ink-line: rgba(31, 30, 29, 0.85);
+  --ink: rgba(31, 30, 29, 0.85);
+  --line: #d9d4c7;
   --paper-shadow: 4px 4px 0 rgba(31, 30, 29, 0.16);
   --font-display: Georgia, "Times New Roman", "Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
 }
@@ -586,14 +590,17 @@ html[data-skin="paper"].dark {
   --active: rgba(217, 123, 82, 0.18);
   --accent: #d97b52;
   --accent-hover: #e08a5f;
+  --danger: #e07a5f;
+  --danger-bg: rgba(224, 122, 95, 0.14);
   --pill-bg: rgba(237, 231, 219, 0.08);
-  --card-shadow: 4px 4px 0 rgba(0, 0, 0, 0.55);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
   --scrollbar: rgba(237, 231, 219, 0.2);
-  --ink-line: rgba(237, 231, 219, 0.28);
+  --ink: rgba(237, 231, 219, 0.3);
+  --line: #3a332b;
   --paper-shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
 }
 
-/* 纸张颗粒:0.08 才能肉眼可辨;深色下用更亮的覆盖 */
+/* 纸张颗粒:0.08 起肉眼可辨;夜读纸用反色噪点提亮 */
 html[data-skin="paper"] body::after {
   content: "";
   position: fixed;
@@ -616,27 +623,26 @@ html[data-skin="paper"] h2 {
   letter-spacing: 0.4px;
 }
 
-/* 铬底与面板:纸白 + 墨线描边(印刷框),替代玻璃的悬浮阴影 */
+/* 铬底与面板:纸白 + 墨线描边(印刷框) */
 html[data-skin="paper"] .shell {
   background: var(--bg-2);
 }
 html[data-skin="paper"] .topbar {
   background: var(--bg-2);
-  border-bottom: 1px solid var(--ink-line);
+  border-bottom: 1px solid var(--ink);
 }
 html[data-skin="paper"] .sidebar {
   background: var(--bg-2);
-  border-right: 1px solid var(--ink-line);
+  border-right: 1px solid var(--ink);
 }
 html[data-skin="paper"] .content {
   background: var(--bg);
-  border-left: 1px solid var(--ink-line);
+  border-top-left-radius: 0;
   box-shadow: none;
 }
 
-/* 卡片与分组:印刷"表格框"——墨线 + 硬阴影 */
+/* 卡片与分组:印刷"表格框"——墨线 + 硬阴影(颜色走令牌,夜读纸可见) */
 html[data-skin="paper"] .group,
-html[data-skin="paper"] .pack,
 html[data-skin="paper"] .terms li,
 html[data-skin="paper"] .letter {
   background: var(--bg-2);
@@ -645,41 +651,83 @@ html[data-skin="paper"] .letter {
   box-shadow: var(--paper-shadow);
 }
 
-/* 专辑卡片:纸框装裱感(封面外一圈纸白 + 墨线) */
+/* 专辑卡片:纸框装裱——留白 8px,封面不再自带阴影,悬停不加第二层位移 */
 html[data-skin="paper"] .card {
   background: var(--bg-2);
   border: 1px solid var(--ink);
   border-radius: 10px;
   box-shadow: var(--paper-shadow);
-  transition: transform 0.4s cubic-bezier(0.34, 1.4, 0.64, 1), box-shadow 0.3s;
+  padding: 8px;
+}
+html[data-skin="paper"] .card .cover,
+html[data-skin="paper"] .card .cover-collage {
+  box-shadow: none;
 }
 html[data-skin="paper"] .card:hover {
-  transform: translateY(-4px);
-  box-shadow: 6px 6px 0 rgba(31, 30, 29, 0.85);
+  transform: none;
+  box-shadow: 6px 6px 0 var(--ink);
 }
 
 /* 列表行:编辑部分隔线(曲目行/歌单行通用) */
-html[data-skin="paper"] .tl .row,
-html[data-skin="paper"] .pl-card {
-  border-bottom: 1px solid var(--line);
+html[data-skin="paper"] .tl .row {
+  border-bottom: 1px solid var(--hairline);
 }
 
 /* 弹窗与右键菜单:同套印刷框 */
 html[data-skin="paper"] .modal {
   background: var(--bg-2);
   border: 1px solid var(--ink);
-  box-shadow: 6px 6px 0 rgba(31, 30, 29, 0.85);
+  box-shadow: var(--paper-shadow);
 }
 
 html[data-skin="paper"] .menu {
   background: var(--bg-2);
   border: 1px solid var(--ink);
-  box-shadow: 5px 5px 0 rgba(31, 30, 29, 0.85);
+  box-shadow: var(--paper-shadow);
 }
 
-/* 播放模式气泡/深色胶囊:纸面下改纸白墨字 */
-html[data-skin="paper"] .mode-hint {
+/* 多选浮条:去玻璃模糊,换纸面材质 */
+html[data-skin="paper"] .sel-bar {
   background: var(--bg-2);
-  color: var(--ink);
   border: 1px solid var(--ink);
+  box-shadow: var(--paper-shadow);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 遮罩:纸面上减淡,去无信息量的模糊 */
+html[data-skin="paper"] .overlay {
+  background: rgba(31, 30, 29, 0.28);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 滑杆未填充轨道:6% 墨在纸上不可见,加浓 */
+html[data-skin="paper"] .range {
+  background: linear-gradient(
+      to right,
+      var(--accent) var(--fill, 0%),
+      rgba(31, 30, 29, 0.18) var(--fill, 0%)
+  );
+}
+
+/* 顶栏播放胶囊:修正"悬停比静止更浅"的反向反馈 */
+html[data-skin="paper"] .topbar .np-pill:hover:not(:disabled) {
+  background: var(--active);
+}
+
+/* 播放模式气泡:纸白墨字(在播放页深底上也清晰) */
+html[data-skin="paper"] .mode-hint {
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--ink);
+  box-shadow: var(--paper-shadow);
+}
+
+/* 播放页:夜读纸下的暖色衔接(冷灰 #242426 与暖纸色温相悖) */
+html[data-skin="paper"] .np {
+  background: #1c1712;
+}
+html[data-skin="paper"] .np .lyrics.synced p {
+  color: rgba(255, 255, 255, 0.55);
 }
