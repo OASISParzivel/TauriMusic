@@ -2,6 +2,12 @@
 import { ref, onUnmounted } from "vue";
 import { MODE_LABEL, player, type PlayMode } from "../stores/player";
 
+// 气泡弹出方向由使用处决定:顶栏贴着窗口上沿,向上弹会被窗体裁掉看不见,
+// 只有向下弹才可见;播放页控制行在窗口底部,默认向上弹
+const props = withDefaults(defineProps<{ hintDir?: "above" | "below" }>(), {
+  hintDir: "above",
+});
+
 /** 切换后短暂显示模式名气泡:图标变化太含蓄,需要明确的操作反馈 */
 const hint = ref("");
 let hintTimer = 0;
@@ -55,9 +61,9 @@ const icons: Record<Mode, string[]> = {
       <path v-if="player.mode === 'one'" d="M10.5 9.5 12 8.6V15" stroke-width="2" />
     </svg>
     <span v-if="player.mode === 'one'" class="badge">1</span>
-    <!-- 模式名气泡:按钮上方浮出,1.3 秒后淡出 -->
+    <!-- 模式名气泡:按 hintDir 向上/向下浮出,1.3 秒后淡出 -->
     <Transition name="mode-hint">
-      <span v-if="hint" class="mode-hint">{{ hint }}</span>
+      <span v-if="hint" class="mode-hint" :class="props.hintDir">{{ hint }}</span>
     </Transition>
   </button>
 </template>
@@ -86,7 +92,6 @@ const icons: Record<Mode, string[]> = {
 }
 .mode-hint {
   position: absolute;
-  bottom: calc(100% + 10px);
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
@@ -101,15 +106,28 @@ const icons: Record<Mode, string[]> = {
   pointer-events: none;
   z-index: 400;
 }
+/* 两个方向共用一套样式,只有锚定边不同 */
+.mode-hint.above {
+  bottom: calc(100% + 10px);
+}
+.mode-hint.below {
+  top: calc(100% + 10px);
+}
 .mode-hint-enter-active {
   transition: opacity 0.18s ease, transform 0.22s var(--ease-spring);
 }
 .mode-hint-leave-active {
   transition: opacity 0.3s ease;
 }
+/* 入场位移朝弹出方向的反侧:向上弹从下方浮起,向下弹从上方落下 */
 .mode-hint-enter-from {
   opacity: 0;
+}
+.mode-hint.above.mode-hint-enter-from {
   transform: translateX(-50%) translateY(4px);
+}
+.mode-hint.below.mode-hint-enter-from {
+  transform: translateX(-50%) translateY(-4px);
 }
 .mode-hint-leave-to {
   opacity: 0;

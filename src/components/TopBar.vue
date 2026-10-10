@@ -39,7 +39,7 @@ const volFill = computed(() => `${player.volume * 100}%`);
 
     <div class="center">
       <div class="controls">
-        <ModeIcon class="t-btn" />
+        <ModeIcon class="t-btn" hint-dir="below" />
         <button class="t-btn big" title="上一曲" :disabled="!current" @click="prev()">
           <svg viewBox="0 0 24 24">
             <path d="M7 5.8v12.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
